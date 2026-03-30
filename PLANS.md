@@ -130,6 +130,7 @@ Do not start implementation before the toolchain is fixed.
 ### Required tools
 
 - Python dev environment for TileLang
+- `pybind11` and `nanobind` in the active Python environment when `MLIR_ENABLE_BINDINGS_PYTHON=ON`
 - MLIR/LLVM build under `3rdparty/` or an equivalent pinned install with:
   - `mlir-opt`
   - `mlir-translate`
@@ -167,10 +168,20 @@ Use this sequence as the default maintenance path:
 
 ```bash
 git submodule update --init --recursive 3rdparty/llvm-project
+python -m pip install pybind11
+python -m pip install nanobind
 maint/scripts/build_llvm_mlir.sh
 export TILELANG_RISCV_LLVM_ROOT=$PWD/3rdparty/llvm-project/install
 export PATH=$TILELANG_RISCV_LLVM_ROOT/bin:$PATH
 ```
+
+Top-level TileLang CMake should use:
+
+```bash
+-DTILELANG_RISCV_MLIR_MODE=AUTO
+```
+
+Switch it to `ON` only after `3rdparty/llvm-project/install` is ready.
 
 ### Preflight checks
 

@@ -20,6 +20,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND "$ENV{CIBUILDWHEEL}")
 endif()
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+include(TileLangRISCVMLIR)
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.gitmodules" AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
   find_package(Git QUIET)
@@ -114,6 +115,8 @@ endmacro()
 foreach(BACKEND IN LISTS TILELANG_BACKENDS)
   tilelang_define_backend_option(${BACKEND})
 endforeach()
+
+tilelang_configure_riscv_mlir()
 
 set(PREBUILD_CYTHON ON)
 
@@ -444,6 +447,12 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 
 target_include_directories(tilelang_objs PRIVATE ${TILE_LANG_INCLUDES})
+if(TILELANG_RISCV_MLIR_ENABLED)
+  target_include_directories(tilelang_objs PRIVATE ${TILELANG_RISCV_MLIR_INCLUDE_DIRS})
+  target_compile_definitions(tilelang_objs PRIVATE TILELANG_ENABLE_LINALG_RISCV_MLIR=1)
+else()
+  target_compile_definitions(tilelang_objs PRIVATE TILELANG_ENABLE_LINALG_RISCV_MLIR=0)
+endif()
 
 add_library(tilelang SHARED $<TARGET_OBJECTS:tilelang_objs>)
 target_link_libraries(tilelang PUBLIC tvm)
