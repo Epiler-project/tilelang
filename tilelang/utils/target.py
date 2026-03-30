@@ -17,6 +17,8 @@ SUPPORTED_TARGETS: dict[str, str] = {
     "hip": "ROCm HIP target (supports options like `hip -mcpu=gfx90a`).",
     "metal": "Apple Metal target for arm64 Macs.",
     "llvm": "LLVM CPU target (accepts standard TVM LLVM options).",
+    "riscv": "Alias for the structured MLIR-backed RISC-V backend.",
+    "linalg_riscv": "Structured MLIR-backed RISC-V backend.",
     "webgpu": "WebGPU target for browser/WebGPU runtimes.",
     "c": "C source backend.",
     "cutedsl": "CuTe DSL GPU target.",
@@ -117,6 +119,22 @@ def normalize_cutedsl_target(target: str | Target) -> Target | None:
     return None
 
 
+def normalize_linalg_riscv_target(target: str | Target) -> str | Target | None:
+    if isinstance(target, Target):
+        return target if target.kind.name == "linalg_riscv" else None
+
+    normalized_target = target.strip()
+    if not normalized_target:
+        return None
+    if normalized_target == "riscv":
+        return "linalg_riscv"
+    if normalized_target.startswith("riscv "):
+        return normalized_target.replace("riscv", "linalg_riscv", 1)
+    if normalized_target == "linalg_riscv" or normalized_target.startswith("linalg_riscv "):
+        return normalized_target
+    return None
+
+
 def determine_target(target: str | Target | Literal["auto"] = "auto", return_object: bool = False) -> str | Target:
     """
     Determine the appropriate target for compilation (CUDA, HIP, or manual selection).
@@ -158,8 +176,11 @@ def determine_target(target: str | Target | Literal["auto"] = "auto", return_obj
             raise ValueError("No CUDA or HIP or MPS available on this system.")
 
     else:
+        possible_riscv_target = normalize_linalg_riscv_target(target)
         possible_cutedsl_target = normalize_cutedsl_target(target)
-        if possible_cutedsl_target is not None:
+        if possible_riscv_target is not None:
+            return_var = possible_riscv_target
+        elif possible_cutedsl_target is not None:
             try:
                 from tilelang.jit.adapter.cutedsl.checks import check_cutedsl_available  # lazy
 

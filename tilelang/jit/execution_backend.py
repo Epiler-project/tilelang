@@ -41,6 +41,8 @@ def allowed_backends_for_target(target: Target, *, include_unavailable: bool = T
         allowed = ["tvm_ffi", "torch"]
     elif kind == "c":  # CPU C backend
         allowed = ["cython", "tvm_ffi"]
+    elif kind == "linalg_riscv":
+        allowed = ["tvm_ffi"]
     else:
         # Fallback: prefer portable hosts
         allowed = ["cython", "tvm_ffi"]
@@ -80,7 +82,7 @@ def resolve_execution_backend(requested: str | None, target: Target) -> str:
         if is_cutedsl_target(target):
             return "cutedsl"
         kind = _target_kind(target)
-        if kind == "cuda" or kind == "metal":
+        if kind == "cuda" or kind == "metal" or kind == "linalg_riscv":
             choice = "tvm_ffi"
         else:
             choice = "cython"

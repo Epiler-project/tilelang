@@ -1,0 +1,27 @@
+#pragma once
+
+#include <sstream>
+#include <string>
+
+#include <tvm/ir/module.h>
+#include <tvm/tir/function.h>
+
+#include "../support/ffi_aliases.h"
+
+namespace tvm {
+namespace codegen {
+
+class CodeGenTileLangLinalgRISCV {
+public:
+  CodeGenTileLangLinalgRISCV() = default;
+
+  void AddFunction(const GlobalVar &gvar, const tir::PrimFunc &func);
+  std::string Finish() const;
+  Array<String> GetFunctionNames() const { return function_names_; }
+
+private:
+  Array<String> function_names_;
+};
+
+} // namespace codegen
+} // namespace tvm

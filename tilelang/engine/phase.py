@@ -6,6 +6,10 @@ from tilelang.transform import PassContext
 from tilelang.contrib.nvcc import have_tma, is_hopper, have_pdl
 
 
+def is_linalg_riscv_target(target: Target | None) -> bool:
+    return target is not None and target.kind.name == "linalg_riscv"
+
+
 def allow_warp_specialized(pass_ctx: PassContext | None = None, target: Target | None = None) -> bool:
     # avoid circular import
     from tilelang.jit.adapter.utils import is_cuda_target
@@ -135,7 +139,37 @@ def PreLowerSemanticCheck(mod: IRModule) -> None:
     tilelang.analysis.FragmentLoopChecker()(mod)
 
 
+def LowerAndLegalizeForRISCV(mod: IRModule, target: Target) -> IRModule:
+    """Keep only the early structural passes for the MLIR-backed RISC-V path."""
+    mod = tir.transform.BindTarget(target)(mod)
+
+    if should_force_let_inline():
+        mod = tilelang.transform.LetInline()(mod)
+    mod = tilelang.transform.AddWrapperForSingleBufStore()(mod)
+    mod = tilelang.transform.LegalizeNegativeIndex()(mod)
+    if should_enable_race_check():
+        mod = tilelang.transform.VerifyParallelLoop()(mod)
+    mod = tilelang.transform.InjectAssumes()(mod)
+    mod = tilelang.transform.Simplify()(mod)
+    mod = tilelang.transform.LegalizeSafeMemoryAccess()(mod)
+    mod = tilelang.transform.LowerAccessPtr()(mod)
+    mod = tilelang.transform.Simplify()(mod)
+    mod = tilelang.transform.HoistNonRestrictParams()(mod)
+    return mod
+
+
+def OptimizeForRISCV(mod: IRModule, target: Target) -> IRModule:
+    """Avoid GPU-specific scheduling passes before structured MLIR codegen."""
+    del target
+    mod = tir.transform.Simplify()(mod)
+    mod = tir.transform.RemoveNoOp()(mod)
+    return mod
+
+
 def LowerAndLegalize(mod: IRModule, target: Target) -> IRModule:
+    if is_linalg_riscv_target(target):
+        return LowerAndLegalizeForRISCV(mod, target)
+
     # Bind the target device information to the module
     """
     Bind target information and progressively legalize and lower frontend Tile IR into a form suitable for downstream optimization and codegen.
@@ -206,6 +240,9 @@ def LowerAndLegalize(mod: IRModule, target: Target) -> IRModule:
 
 
 def OptimizeForTarget(mod: IRModule, target: Target) -> IRModule:
+    if is_linalg_riscv_target(target):
+        return OptimizeForRISCV(mod, target)
+
     pass_ctx = tilelang.transform.get_pass_context()
     # Lower the shared.tmem into specific initialization slot
     mod = tilelang.transform.LowerSharedTmem()(mod)
