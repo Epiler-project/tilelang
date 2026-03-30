@@ -456,6 +456,9 @@ endif()
 
 add_library(tilelang SHARED $<TARGET_OBJECTS:tilelang_objs>)
 target_link_libraries(tilelang PUBLIC tvm)
+if(TILELANG_RISCV_MLIR_ENABLED)
+  target_link_libraries(tilelang PRIVATE ${TILELANG_RISCV_MLIR_LINK_LIBS})
+endif()
 
 # Place dev build outputs under build/lib for consistency
 set_target_properties(tilelang PROPERTIES

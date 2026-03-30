@@ -229,11 +229,15 @@ Recommended commit slicing:
 ### Current status snapshot
 
 - Phase 0 target plumbing is landed
-- the next mandatory slice is Phase 1 toolchain bootstrap:
+- Phase 1 infrastructure is partially landed:
   - vendored `llvm-project` submodule
   - deterministic build script
   - Python toolchain discovery helpers
-- the placeholder MLIR text module from Phase 0 must still be removed before Phase 1 is considered complete
+  - top-level CMake gating for vendored MLIR
+  - minimal C++ MLIR builder that emits `module { func.func ... }`
+- remaining Phase 1 gap:
+  - replace the temporary source-module transport with a dedicated MLIR-facing runtime module
+  - begin real `memref/tensor/linalg/scf` lowering instead of function-name-only scaffolding
 
 ## Phase 0: Freeze Scope And Scaffolding
 

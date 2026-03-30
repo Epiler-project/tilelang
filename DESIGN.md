@@ -222,6 +222,14 @@ Python DSL
 
 这样后续无论是接 C++ MLIR API、Python binding，还是 artifact export，都不会漂移到不可复现的外部环境。
 
+当前实现状态补充：
+
+- 当 `TILELANG_RISCV_MLIR_MODE=ON` 且 vendored LLVM/MLIR 已安装后，
+  `src/target/codegen_linalg_riscv.cc` 已经会使用真实 MLIR C++ API 构造最小
+  `module { func.func ... }` 骨架
+- 这一步的目标只是替换“纯字符串拼接占位器”
+- 真正的 `memref/tensor/linalg/scf` 结构化 lowering 仍然属于后续任务
+
 
 ## 6. 切入点设计
 
