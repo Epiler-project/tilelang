@@ -161,6 +161,7 @@ def LowerAndLegalizeForRISCV(mod: IRModule, target: Target) -> IRModule:
 def OptimizeForRISCV(mod: IRModule, target: Target) -> IRModule:
     """Avoid GPU-specific scheduling passes before structured MLIR codegen."""
     del target
+    mod = tir.transform.LowerInitBlock()(mod)
     mod = tir.transform.Simplify()(mod)
     mod = tir.transform.RemoveNoOp()(mod)
     return mod

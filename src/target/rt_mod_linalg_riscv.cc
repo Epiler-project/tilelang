@@ -4,6 +4,7 @@
 #include <tvm/ffi/extra/module.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/reflection/registry.h>
+#include <tvm/tir/transform.h>
 #include <tvm/target/target_kind.h>
 
 #include <fstream>
@@ -103,6 +104,7 @@ ffi::Module MLIRSourceModuleCreate(const std::string &code,
 
 ffi::Module BuildTileLangLinalgRISCV(IRModule mod, Target target) {
   (void)target;
+  mod = tir::transform::LowerInitBlock()(mod);
   CodeGenTileLangLinalgRISCV cg;
   for (const auto &kv : mod->functions) {
     ICHECK(kv.second->IsInstance<tir::PrimFuncNode>())

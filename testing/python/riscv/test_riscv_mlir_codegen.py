@@ -174,3 +174,28 @@ def copy_sub(A: T.Buffer((8,), "float32"), B: T.Buffer((4,), "float32")):
     assert "memref.subview" in source
     assert "to memref<4xf32, strided<[1], offset: 2>>" in source
     assert "memref.load %subview" in source
+
+
+def test_riscv_codegen_lowers_reduce_sum_init_block():
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_source(
+            """
+# from tvm.script import tir as T
+@T.prim_func
+def reduce_sum(A: T.Buffer((4, 8), "float32"), B: T.Buffer((4,), "float32")):
+    for i, k in T.grid(4, 8):
+        with T.block("sum"):
+            vi = T.axis.spatial(4, i)
+            vk = T.axis.reduce(8, k)
+            with T.init():
+                B[vi] = T.float32(0)
+            B[vi] = B[vi] + A[vi, vk]
+""",
+            "reduce_sum",
+        )
+    )
+
+    assert source.count("scf.for") == 2
+    assert "arith.cmpi eq" in source
+    assert "arith.constant 0.000000e+00 : f32" in source
+    assert "arith.addf" in source

@@ -797,7 +797,7 @@ private:
 
   mlir::Value VisitExpr_(const FloatImmNode* op) final {
     mlir::FloatType type = mlir::cast<mlir::FloatType>(LowerScalarType(op->dtype));
-    return builder_.create<mlir::arith::ConstantFloatOp>(loc_, type, llvm::APFloat(op->value));
+    return builder_.create<mlir::arith::ConstantOp>(loc_, builder_.getFloatAttr(type, op->value));
   }
 
   mlir::Value VisitExprDefault_(const Object* op) final {

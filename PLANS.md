@@ -245,6 +245,7 @@ Recommended commit slicing:
     - `AllocBuffer/BufferRealize/DeclBuffer -> memref.alloca`
     - simple contiguous `match_buffer -> memref.subview`
     - `BufferLoad/BufferStore -> memref.load/store`
+    - simple reduction init fallback via `tir.transform.LowerInitBlock`
     - constants, casts, arithmetic, comparisons, `Select`
   - automated coverage currently includes:
     - tiny kernel shell
@@ -254,9 +255,10 @@ Recommended commit slicing:
     - if-guarded store
     - local alloc-buffer staging
     - contiguous match-buffer subview
+    - reduce-sum fallback
 - next gap has shifted to Phase 2+:
   - broader region / subview / slice lowering beyond the simple contiguous case
-  - reduction blocks with `T.init`
+  - native reduction recognition beyond `LowerInitBlock + scf` fallback
   - `linalg.generic` / `linalg.reduce`
   - `tl.gemm -> linalg.matmul`
 

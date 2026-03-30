@@ -239,6 +239,7 @@ Python DSL
   - `AllocBuffer/BufferRealize/DeclBuffer -> memref.alloca`
   - simple contiguous `match_buffer -> memref.subview`
   - `BufferLoad/BufferStore -> memref.load/store`
+  - simple reduction init block 通过 `LowerInitBlock` 降成 `scf.if` fallback
   - 常量、`Cast`、`Add/Sub/Mul/Div`、比较、`Select`
 - 已有自动化样例覆盖：
   - simple copy
@@ -247,9 +248,10 @@ Python DSL
   - if-guarded store
   - local `alloc_buffer` staging
   - contiguous subview / `match_buffer`
+  - reduce-sum fallback
 - 仍然属于后续任务的部分主要是：
   - 更完整的 region / subview 组合与 rank-reduction 场景
-  - reduction block / `T.init`
+  - 更直接的 reduction 识别，而不是只依赖 `LowerInitBlock + scf` fallback
   - `linalg.generic`、`linalg.reduce`
   - `tl.gemm -> linalg.matmul`
 
