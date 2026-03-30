@@ -243,6 +243,7 @@ Recommended commit slicing:
     - `For -> scf.for`
     - `IfThenElse -> scf.if`
     - `AllocBuffer/BufferRealize/DeclBuffer -> memref.alloca`
+    - simple contiguous `match_buffer -> memref.subview`
     - `BufferLoad/BufferStore -> memref.load/store`
     - constants, casts, arithmetic, comparisons, `Select`
   - automated coverage currently includes:
@@ -252,8 +253,9 @@ Recommended commit slicing:
     - scalar-param saxpy
     - if-guarded store
     - local alloc-buffer staging
+    - contiguous match-buffer subview
 - next gap has shifted to Phase 2+:
-  - `match_buffer` / region / subview lowering
+  - broader region / subview / slice lowering beyond the simple contiguous case
   - reduction blocks with `T.init`
   - `linalg.generic` / `linalg.reduce`
   - `tl.gemm -> linalg.matmul`

@@ -149,3 +149,28 @@ def staged_copy(A: T.Buffer((4,), "float32"), B: T.Buffer((4,), "float32")):
 
     assert "memref.alloca() : memref<4xf32>" in source
     assert source.count("scf.for") == 2
+
+
+def test_riscv_codegen_lowers_match_buffer_to_subview():
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_source(
+            """
+# from tvm.script import tir as T
+@T.prim_func
+def copy_sub(A: T.Buffer((8,), "float32"), B: T.Buffer((4,), "float32")):
+    with T.block("root"):
+        T.reads()
+        T.writes()
+        A0 = T.match_buffer(A[2:6], (4,), dtype="float32")
+        for i in T.serial(4):
+            with T.block("copy"):
+                vi = T.axis.spatial(4, i)
+                B[vi] = A0[vi]
+""",
+            "copy_sub",
+        )
+    )
+
+    assert "memref.subview" in source
+    assert "to memref<4xf32, strided<[1], offset: 2>>" in source
+    assert "memref.load %subview" in source

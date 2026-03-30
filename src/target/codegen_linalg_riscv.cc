@@ -153,6 +153,19 @@ private:
     return mlir::MemRefType::get(shape, LowerScalarType(element_dtype));
   }
 
+  llvm::SmallVector<int64_t, 4> LowerStaticShape(const Array<PrimExpr>& shape_exprs) {
+    llvm::SmallVector<int64_t, 4> shape;
+    shape.reserve(shape_exprs.size());
+    for (const PrimExpr& dim : shape_exprs) {
+      if (const auto* imm = dim.as<IntImmNode>()) {
+        shape.push_back(imm->value);
+      } else {
+        shape.push_back(mlir::ShapedType::kDynamic);
+      }
+    }
+    return shape;
+  }
+
   llvm::SmallVector<mlir::Value, 4> LowerDynamicSizes(const Array<PrimExpr>& shape_exprs) {
     llvm::SmallVector<mlir::Value, 4> dynamic_sizes;
     for (const PrimExpr& dim : shape_exprs) {
@@ -161,6 +174,40 @@ private:
       }
     }
     return dynamic_sizes;
+  }
+
+  mlir::OpFoldResult LowerIndexOpFoldResult(const PrimExpr& expr) {
+    if (const auto* imm = expr.as<IntImmNode>()) {
+      return builder_.getIndexAttr(imm->value);
+    }
+    return AsIndex(VisitExpr(expr), expr.dtype());
+  }
+
+  llvm::SmallVector<mlir::OpFoldResult, 4> LowerRegionOffsets(const Array<Range>& region) {
+    llvm::SmallVector<mlir::OpFoldResult, 4> offsets;
+    offsets.reserve(region.size());
+    for (const Range& range : region) {
+      offsets.push_back(LowerIndexOpFoldResult(range->min));
+    }
+    return offsets;
+  }
+
+  llvm::SmallVector<mlir::OpFoldResult, 4> LowerRegionSizes(const Array<Range>& region) {
+    llvm::SmallVector<mlir::OpFoldResult, 4> sizes;
+    sizes.reserve(region.size());
+    for (const Range& range : region) {
+      sizes.push_back(LowerIndexOpFoldResult(range->extent));
+    }
+    return sizes;
+  }
+
+  llvm::SmallVector<mlir::OpFoldResult, 4> UnitStrides(size_t rank) {
+    llvm::SmallVector<mlir::OpFoldResult, 4> strides;
+    strides.reserve(rank);
+    for (size_t i = 0; i < rank; ++i) {
+      strides.push_back(builder_.getIndexAttr(1));
+    }
+    return strides;
   }
 
   void ValidateContiguousBuffer(const tir::Buffer& buffer) {
@@ -332,6 +379,32 @@ private:
     saved_bindings->emplace_back(buffer.get(), SaveAndSet(buffer_values_, buffer.get(), value));
     saved_bindings->emplace_back(buffer->data.get(),
                                  SaveAndSet(buffer_values_, buffer->data.get(), value));
+  }
+
+  mlir::Value CreateSubview(const tir::MatchBufferRegion& match_buffer) {
+    const tir::Buffer& target_buffer = match_buffer->buffer;
+    const tir::BufferRegion& source_region = match_buffer->source;
+    const tir::Buffer& source_buffer = source_region->buffer;
+
+    ValidateContiguousBuffer(target_buffer);
+
+    mlir::Value source = LookupBufferValue(source_buffer);
+    mlir::MemRefType source_type = mlir::cast<mlir::MemRefType>(source.getType());
+    llvm::SmallVector<mlir::OpFoldResult, 4> offsets = LowerRegionOffsets(source_region->region);
+    llvm::SmallVector<mlir::OpFoldResult, 4> sizes = LowerRegionSizes(source_region->region);
+    llvm::SmallVector<mlir::OpFoldResult, 4> strides = UnitStrides(source_region->region.size());
+
+    mlir::MemRefType result_type;
+    if (target_buffer->shape.size() == source_region->region.size()) {
+      result_type = mlir::memref::SubViewOp::inferResultType(source_type, offsets, sizes, strides);
+    } else {
+      result_type = mlir::memref::SubViewOp::inferRankReducedResultType(
+          LowerStaticShape(target_buffer->shape), source_type, offsets, sizes, strides);
+    }
+
+    return builder_
+        .create<mlir::memref::SubViewOp>(loc_, result_type, source, offsets, sizes, strides)
+        .getResult();
   }
 
   mlir::Value CreateAlloca(const Array<PrimExpr>& shape_exprs, DataType element_dtype) {
@@ -512,15 +585,17 @@ private:
 
   void VisitStmt_(const tir::BlockNode* op) final {
     ICHECK(!op->init.defined()) << "Reduction blocks are not supported yet in linalg_riscv lowering";
-    ICHECK(op->match_buffers.empty())
-        << "match_buffer regions are not supported yet in linalg_riscv lowering";
 
     std::vector<std::pair<const Object*, SavedBinding>> saved_bindings;
-    saved_bindings.reserve(op->alloc_buffers.size() * 2);
+    saved_bindings.reserve(op->alloc_buffers.size() * 2 + op->match_buffers.size() * 2);
     for (const tir::Buffer& buffer : op->alloc_buffers) {
       ValidateContiguousBuffer(buffer);
       mlir::Value alloc = CreateAlloca(buffer->shape, buffer->dtype);
       BindBufferAliases(buffer, alloc, &saved_bindings);
+    }
+    for (const tir::MatchBufferRegion& match_buffer : op->match_buffers) {
+      mlir::Value subview = CreateSubview(match_buffer);
+      BindBufferAliases(match_buffer->buffer, subview, &saved_bindings);
     }
 
     VisitStmt(op->body);
