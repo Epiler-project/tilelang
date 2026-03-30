@@ -229,6 +229,8 @@ Python DSL
 - 当 `TILELANG_RISCV_MLIR_MODE=ON` 且 vendored LLVM/MLIR 已安装后，
   `src/target/codegen_linalg_riscv.cc` 已经会使用真实 MLIR C++ API 构造最小
   `module { func.func ... }` 骨架
+- `src/target/rt_mod_linalg_riscv.cc` 已经返回专用 `mlir` source module，
+  不再复用 `CSourceModuleCreate(..., "mlir", ...)`
 - 这一步的目标只是替换“纯字符串拼接占位器”
 - 真正的 `memref/tensor/linalg/scf` 结构化 lowering 仍然属于后续任务
 
