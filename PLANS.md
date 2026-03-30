@@ -235,6 +235,7 @@ Recommended commit slicing:
   - Python toolchain discovery helpers
   - top-level CMake gating for vendored MLIR
   - minimal C++ MLIR builder that emits `module { func.func ... }`
+  - `tilelang.tladapter.Pipeline` backed by vendored `mlir-opt`
 - remaining Phase 1 gap:
   - replace the temporary source-module transport with a dedicated MLIR-facing runtime module
   - begin real `memref/tensor/linalg/scf` lowering instead of function-name-only scaffolding

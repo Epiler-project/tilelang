@@ -186,6 +186,8 @@ Python DSL
   - 在 C++ 中直接构建 `mlir::ModuleOp`
 - `tilelang/tladapter/`
   - 暴露 pass pipeline、模块 parse/serialize、driver 封装
+  - 当前先通过 vendored `mlir-opt` 驱动 pass pipeline
+  - vendored MLIR Python package 路径发现能力已补齐，后续可切回进程内 binding
 - `tilelang/jit/adapter/riscv/`
   - 负责 Python 侧编译、导出、运行入口
 

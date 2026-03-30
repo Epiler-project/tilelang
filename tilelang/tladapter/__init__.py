@@ -10,6 +10,7 @@ from .toolchain import (
     resolve_llvm_dir,
     resolve_llvm_root,
     resolve_mlir_dir,
+    resolve_mlir_python_root,
     resolve_tool,
     toolchain_summary,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "resolve_llvm_dir",
     "resolve_llvm_root",
     "resolve_mlir_dir",
+    "resolve_mlir_python_root",
     "resolve_tool",
     "toolchain_summary",
 ]

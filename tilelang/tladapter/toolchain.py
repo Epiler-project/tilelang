@@ -105,6 +105,22 @@ def resolve_tool(tool_name: str, *, required: bool = True) -> Path | None:
     return None
 
 
+def resolve_mlir_python_root(*, required: bool = True) -> Path | None:
+    """Resolve the vendored MLIR Python package root."""
+
+    for root in iter_llvm_roots():
+        candidate = root / "python_packages" / "mlir_core"
+        if (candidate / "mlir").is_dir():
+            return candidate.resolve()
+
+    if required:
+        raise ToolchainNotFoundError(
+            "MLIR Python bindings not found. Build the vendored toolchain with "
+            "`maint/scripts/build_llvm_mlir.sh` and keep MLIR Python bindings enabled."
+        )
+    return None
+
+
 def toolchain_summary() -> dict[str, str]:
     """Return a small summary of the discovered toolchain paths."""
 
@@ -118,6 +134,9 @@ def toolchain_summary() -> dict[str, str]:
     llvm_dir = resolve_llvm_dir(required=False)
     if llvm_dir is not None:
         summary["llvm_dir"] = str(llvm_dir)
+    mlir_python_root = resolve_mlir_python_root(required=False)
+    if mlir_python_root is not None:
+        summary["mlir_python_root"] = str(mlir_python_root)
     for tool in ("mlir-opt", "mlir-translate", "llc", "clang"):
         tool_path = resolve_tool(tool, required=False)
         if tool_path is not None:

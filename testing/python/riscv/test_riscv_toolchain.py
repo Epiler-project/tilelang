@@ -3,11 +3,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import tilelang.tladapter.toolchain as toolchain
 from tilelang.tladapter.toolchain import (
     ToolchainNotFoundError,
     resolve_llvm_dir,
     resolve_llvm_root,
     resolve_mlir_dir,
+    resolve_mlir_python_root,
     resolve_tool,
 )
 
@@ -16,6 +18,7 @@ def _make_fake_toolchain(root: Path) -> None:
     (root / "bin").mkdir(parents=True, exist_ok=True)
     (root / "lib" / "cmake" / "mlir").mkdir(parents=True, exist_ok=True)
     (root / "lib" / "cmake" / "llvm").mkdir(parents=True, exist_ok=True)
+    (root / "python_packages" / "mlir_core" / "mlir").mkdir(parents=True, exist_ok=True)
     for tool_name in ("mlir-opt", "mlir-translate", "llc", "clang"):
         tool_path = root / "bin" / tool_name
         tool_path.write_text("#!/usr/bin/env bash\n")
@@ -31,6 +34,7 @@ def test_toolchain_env_root_wins(monkeypatch, tmp_path):
     assert resolve_llvm_root() == fake_root.resolve()
     assert resolve_mlir_dir() == (fake_root / "lib" / "cmake" / "mlir").resolve()
     assert resolve_llvm_dir() == (fake_root / "lib" / "cmake" / "llvm").resolve()
+    assert resolve_mlir_python_root() == (fake_root / "python_packages" / "mlir_core").resolve()
     assert resolve_tool("mlir-opt") == (fake_root / "bin" / "mlir-opt").resolve()
 
 
@@ -41,6 +45,7 @@ def test_tool_lookup_falls_back_to_path(monkeypatch, tmp_path):
     fake_tool.write_text("#!/usr/bin/env bash\n")
     fake_tool.chmod(0o755)
 
+    monkeypatch.setattr(toolchain, "_LLVM_SUBMODULE_ROOT", tmp_path / "missing-llvm-project")
     monkeypatch.delenv("TILELANG_RISCV_LLVM_ROOT", raising=False)
     monkeypatch.delenv("TILELANG_LLVM_INSTALL_DIR", raising=False)
     monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
@@ -49,6 +54,7 @@ def test_tool_lookup_falls_back_to_path(monkeypatch, tmp_path):
 
 
 def test_missing_toolchain_raises(monkeypatch):
+    monkeypatch.setattr(toolchain, "_LLVM_SUBMODULE_ROOT", Path("/tmp/tilelang-riscv-no-toolchain"))
     monkeypatch.delenv("TILELANG_RISCV_LLVM_ROOT", raising=False)
     monkeypatch.delenv("TILELANG_LLVM_INSTALL_DIR", raising=False)
 
