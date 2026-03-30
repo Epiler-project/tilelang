@@ -5,6 +5,24 @@ try:
 except ImportError:
     _native = None
 
+from .toolchain import (
+    ToolchainNotFoundError,
+    resolve_llvm_dir,
+    resolve_llvm_root,
+    resolve_mlir_dir,
+    resolve_tool,
+    toolchain_summary,
+)
 from .utils import Pipeline, pass_fn
 
-__all__ = ["Pipeline", "pass_fn", "_native"]
+__all__ = [
+    "Pipeline",
+    "ToolchainNotFoundError",
+    "_native",
+    "pass_fn",
+    "resolve_llvm_dir",
+    "resolve_llvm_root",
+    "resolve_mlir_dir",
+    "resolve_tool",
+    "toolchain_summary",
+]

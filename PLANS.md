@@ -83,7 +83,10 @@ The project is considered complete for MVP when all items below are true.
 
 ### New files to add
 
+- `3rdparty/llvm-project`
+- `maint/scripts/build_llvm_mlir.sh`
 - `tilelang/tladapter/__init__.py`
+- `tilelang/tladapter/toolchain.py`
 - `tilelang/tladapter/utils.py`
 - `tilelang/tladapter/transforms/__init__.py`
 - `tilelang/tladapter/transforms/mlir.py`
@@ -95,6 +98,7 @@ The project is considered complete for MVP when all items below are true.
 - `tilelang/jit/adapter/riscv/libgen.py`
 - `tilelang/jit/adapter/riscv/wrapper.py`
 - `testing/python/riscv/test_riscv_target_parse.py`
+- `testing/python/riscv/test_riscv_toolchain.py`
 - `testing/python/riscv/test_riscv_lower_to_mlir.py`
 - `testing/python/riscv/test_riscv_copy_codegen.py`
 - `testing/python/riscv/test_riscv_reduce_codegen.py`
@@ -115,6 +119,13 @@ The project is considered complete for MVP when all items below are true.
 ## 5. Toolchain Requirements
 
 Do not start implementation before the toolchain is fixed.
+
+### Source of truth
+
+- vendored LLVM/MLIR source lives at `3rdparty/llvm-project`
+- pin the submodule to `llvmorg-21.1.7`
+- build the host toolchain with `maint/scripts/build_llvm_mlir.sh`
+- discover the install from Python through `tilelang.tladapter.toolchain`
 
 ### Required tools
 
@@ -150,6 +161,17 @@ export TILELANG_RISCV_RUNNER=qemu-riscv64
 export TILELANG_RISCV_RUNNER_FLAGS='-L /opt/riscv/sysroot'
 ```
 
+### Standard bootstrap
+
+Use this sequence as the default maintenance path:
+
+```bash
+git submodule update --init --recursive 3rdparty/llvm-project
+maint/scripts/build_llvm_mlir.sh
+export TILELANG_RISCV_LLVM_ROOT=$PWD/3rdparty/llvm-project/install
+export PATH=$TILELANG_RISCV_LLVM_ROOT/bin:$PATH
+```
+
 ### Preflight checks
 
 These commands must pass before phase 3 starts.
@@ -160,6 +182,15 @@ mlir-translate --version
 llc --version | rg riscv
 clang --version
 qemu-riscv64 --version
+```
+
+The Python-side discovery layer should also succeed:
+
+```bash
+python - <<'PY'
+from tilelang.tladapter import toolchain_summary
+print(toolchain_summary())
+PY
 ```
 
 ## 6. Branch And Commit Strategy
@@ -183,6 +214,15 @@ Recommended commit slicing:
 9. tests and examples
 
 ## 7. Phase Plan
+
+### Current status snapshot
+
+- Phase 0 target plumbing is landed
+- the next mandatory slice is Phase 1 toolchain bootstrap:
+  - vendored `llvm-project` submodule
+  - deterministic build script
+  - Python toolchain discovery helpers
+- the placeholder MLIR text module from Phase 0 must still be removed before Phase 1 is considered complete
 
 ## Phase 0: Freeze Scope And Scaffolding
 

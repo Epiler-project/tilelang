@@ -175,7 +175,13 @@ Python DSL
 建议采用和 `npuir` 相近的工程组织方式，但目标改为通用 MLIR dialect：
 
 - `3rdparty/llvm-project`
+  - 作为仓库内 vendored submodule 管理
+  - 当前固定到 `llvmorg-21.1.7`
   - 提供 LLVM + MLIR 头文件、库、工具链
+- `maint/scripts/build_llvm_mlir.sh`
+  - 负责在仓库内构建 host 侧 LLVM/MLIR 安装目录
+- `tilelang/tladapter/toolchain.py`
+  - 负责在 Python 侧定位 LLVM/MLIR 安装根目录、`mlir-opt`、`mlir-translate`、`llc`、`clang`
 - `src/target/codegen_linalg_riscv.cc`
   - 在 C++ 中直接构建 `mlir::ModuleOp`
 - `tilelang/tladapter/`
@@ -195,6 +201,26 @@ Python DSL
 如果为了先打通 target plumbing、runtime registration、Python dispatch，临时出现一个只用于 `inspect_source()` 的占位 source module，
 它也只能被视为 **Phase 0 过渡件**，不能算作设计完成。真正满足本设计文档的实现，必须在 Phase 1 起切换到
 “用 MLIR C++ API 构建内存中的 `mlir::ModuleOp`，再按需 dump/serialize”的路径。
+
+### 5.5 Toolchain 约束
+
+为了保证长期维护成本可控，`tilelang-riscv` 不应依赖“系统里碰巧装过一个 LLVM”。
+
+- 首选来源是仓库内 `3rdparty/llvm-project`
+- 构建输出默认放在：
+  - `3rdparty/llvm-project/build-host`
+  - `3rdparty/llvm-project/install`
+- Python/CMake 两侧统一优先识别：
+  - `TILELANG_RISCV_LLVM_ROOT`
+  - `TILELANG_LLVM_INSTALL_DIR`
+
+这意味着：
+
+- 源码版本通过 submodule 固定
+- 构建方式通过 `maint/scripts/build_llvm_mlir.sh` 固定
+- 运行时发现逻辑通过 `tilelang.tladapter.toolchain` 固定
+
+这样后续无论是接 C++ MLIR API、Python binding，还是 artifact export，都不会漂移到不可复现的外部环境。
 
 
 ## 6. 切入点设计
