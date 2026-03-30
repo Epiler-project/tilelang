@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+import tilelang.language as T
 from tilelang import tvm
+from tilelang.engine.phase import LowerAndLegalizeForRISCV, OptimizeForRISCV
 
 
 def _build_mlir_module(func=None, global_symbol="kernel"):
@@ -17,6 +19,15 @@ def _build_mlir_module(func=None, global_symbol="kernel"):
 def _build_mlir_from_source(source: str, global_symbol: str):
     func = tvm.script.from_source(source)
     return _build_mlir_module(func, global_symbol=global_symbol)
+
+
+def _build_mlir_from_tilelang_prim(func, global_symbol: str):
+    func = func.with_attr("global_symbol", global_symbol)
+    mod = tvm.IRModule({global_symbol: func})
+    target = tvm.target.Target("linalg_riscv")
+    mod = LowerAndLegalizeForRISCV(mod, target)
+    mod = OptimizeForRISCV(mod, target)
+    return tvm.ffi.get_global_func("target.build.tilelang_linalg_riscv")(mod, target)
 
 
 def _real_mlir_source_or_skip(rt_mod) -> str:
@@ -199,3 +210,35 @@ def reduce_sum(A: T.Buffer((4, 8), "float32"), B: T.Buffer((4,), "float32")):
     assert "arith.cmpi eq" in source
     assert "arith.constant 0.000000e+00 : f32" in source
     assert "arith.addf" in source
+
+
+def test_riscv_codegen_lowers_tilelang_copy_kernel():
+    @T.prim_func
+    def tile_copy(A: T.Tensor((4,), "float32"), B: T.Tensor((4,), "float32")):
+        with T.Kernel(1, threads=1):
+            A_shared = T.alloc_shared((4,), "float32")
+            T.copy(A, A_shared)
+            T.copy(A_shared, B)
+
+    source = _real_mlir_source_or_skip(_build_mlir_from_tilelang_prim(tile_copy, "tile_copy"))
+
+    assert "func.func @tile_copy" in source
+    assert source.count("memref.copy") == 2
+    assert "memref.alloca() : memref<4xf32>" in source
+
+
+def test_riscv_codegen_lowers_tilelang_fill_kernel():
+    @T.prim_func
+    def tile_fill(B: T.Tensor((4,), "float32")):
+        with T.Kernel(1, threads=1):
+            tmp = T.alloc_fragment((4,), "float32")
+            T.clear(tmp)
+            T.copy(tmp, B)
+
+    source = _real_mlir_source_or_skip(_build_mlir_from_tilelang_prim(tile_fill, "tile_fill"))
+
+    assert "func.func @tile_fill" in source
+    assert "arith.sitofp" in source or "arith.constant 0.000000e+00 : f32" in source
+    assert "scf.for" in source
+    assert "memref.store" in source
+    assert "memref.copy" in source

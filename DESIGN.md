@@ -233,11 +233,15 @@ Python DSL
   不再复用 `CSourceModuleCreate(..., "mlir", ...)`
 - 当前已经打通的 structured lowering 子集包括：
   - `PrimFunc` buffer/scalar 参数到 `func.func` 参数
+  - unit `thread_extent` / `T.Kernel(..., threads=1)` shell
   - `BlockRealize/Block`
   - `For -> scf.for`
   - `IfThenElse -> scf.if`
   - `AllocBuffer/BufferRealize/DeclBuffer -> memref.alloca`
+  - static compact row-major buffer parameters with explicit strides
   - simple contiguous `match_buffer -> memref.subview`
+  - `tl.tileop.copy -> memref.copy` or `scf + memref.load/store` fallback
+  - `tl.tileop.fill -> scf + memref.store` fallback
   - `BufferLoad/BufferStore -> memref.load/store`
   - simple reduction init block 通过 `LowerInitBlock` 降成 `scf.if` fallback
   - 常量、`Cast`、`Add/Sub/Mul/Div`、比较、`Select`
@@ -249,6 +253,8 @@ Python DSL
   - local `alloc_buffer` staging
   - contiguous subview / `match_buffer`
   - reduce-sum fallback
+  - TileLang `T.copy` kernel shell
+  - TileLang `T.clear` / fill kernel shell
 - 仍然属于后续任务的部分主要是：
   - 更完整的 region / subview 组合与 rank-reduction 场景
   - 更直接的 reduction 识别，而不是只依赖 `LowerInitBlock + scf` fallback

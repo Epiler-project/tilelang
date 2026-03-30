@@ -1,5 +1,6 @@
 #include "codegen_linalg_riscv.h"
 
+#include <functional>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -25,9 +26,12 @@
 #include <mlir/IR/MLIRContext.h>
 #endif
 
+#include <tvm/arith/analyzer.h>
 #include <tvm/ir/attrs.h>
 #include <tvm/tir/op.h>
 #include <tvm/tir/stmt_functor.h>
+
+#include "../op/utils.h"
 
 namespace tvm {
 namespace codegen {
@@ -140,6 +144,8 @@ private:
     return builder_.create<mlir::arith::ConstantIntOp>(loc_, type, value);
   }
 
+  mlir::Value ZeroIndex() { return ConstantIntLike(0, builder_.getIndexType()); }
+
   mlir::MemRefType LowerMemRefType(DataType element_dtype, const Array<PrimExpr>& shape_exprs) {
     llvm::SmallVector<int64_t, 4> shape;
     shape.reserve(shape_exprs.size());
@@ -210,11 +216,44 @@ private:
     return strides;
   }
 
+  bool IsStaticOne(const PrimExpr& expr) {
+    if (const auto* imm = expr.as<IntImmNode>()) {
+      return imm->value == 1;
+    }
+    return false;
+  }
+
+  bool AreStaticEqual(const PrimExpr& lhs, const PrimExpr& rhs) {
+    const auto* lhs_imm = lhs.as<IntImmNode>();
+    const auto* rhs_imm = rhs.as<IntImmNode>();
+    return lhs_imm != nullptr && rhs_imm != nullptr && lhs_imm->value == rhs_imm->value;
+  }
+
+  bool HasStaticCompactRowMajorLayout(const tir::Buffer& buffer) {
+    if (buffer->strides.empty()) {
+      return true;
+    }
+    if (buffer->strides.size() != buffer->shape.size()) {
+      return false;
+    }
+
+    int64_t expected_stride = 1;
+    for (int i = static_cast<int>(buffer->shape.size()) - 1; i >= 0; --i) {
+      const auto* stride_imm = buffer->strides[i].as<IntImmNode>();
+      const auto* shape_imm = buffer->shape[i].as<IntImmNode>();
+      if (stride_imm == nullptr || shape_imm == nullptr || stride_imm->value != expected_stride) {
+        return false;
+      }
+      expected_stride *= shape_imm->value;
+    }
+    return true;
+  }
+
   void ValidateContiguousBuffer(const tir::Buffer& buffer) {
     ICHECK_EQ(buffer->dtype.lanes(), 1)
         << "Vector element buffers are not supported yet for linalg_riscv";
-    ICHECK(buffer->strides.empty())
-        << "Strided buffers are not supported yet for linalg_riscv: " << buffer->name;
+    ICHECK(HasStaticCompactRowMajorLayout(buffer))
+        << "Only compact row-major buffers are supported in linalg_riscv: " << buffer->name;
     ICHECK(tir::is_zero(buffer->elem_offset))
         << "Non-zero elem_offset is not supported yet for linalg_riscv: " << buffer->name;
   }
@@ -407,6 +446,20 @@ private:
         .getResult();
   }
 
+  mlir::Value CreateSubview(const tir::BufferRegion& region) {
+    const tir::Buffer& source_buffer = region->buffer;
+    mlir::Value source = LookupBufferValue(source_buffer);
+    mlir::MemRefType source_type = mlir::cast<mlir::MemRefType>(source.getType());
+    llvm::SmallVector<mlir::OpFoldResult, 4> offsets = LowerRegionOffsets(region->region);
+    llvm::SmallVector<mlir::OpFoldResult, 4> sizes = LowerRegionSizes(region->region);
+    llvm::SmallVector<mlir::OpFoldResult, 4> strides = UnitStrides(region->region.size());
+    mlir::MemRefType result_type =
+        mlir::memref::SubViewOp::inferResultType(source_type, offsets, sizes, strides);
+    return builder_
+        .create<mlir::memref::SubViewOp>(loc_, result_type, source, offsets, sizes, strides)
+        .getResult();
+  }
+
   mlir::Value CreateAlloca(const Array<PrimExpr>& shape_exprs, DataType element_dtype) {
     mlir::MemRefType memref_type = LowerMemRefType(element_dtype, shape_exprs);
     llvm::SmallVector<mlir::Value, 4> dynamic_sizes = LowerDynamicSizes(shape_exprs);
@@ -424,6 +477,125 @@ private:
     mlir::OpBuilder::InsertionGuard guard(builder_);
     builder_.setInsertionPoint(if_op.thenYield());
     body_builder();
+  }
+
+  template <typename F>
+  void EmitLoopNest(const Array<Range>& region, F&& body_builder) {
+    llvm::SmallVector<mlir::Value, 4> coords;
+    std::function<void(size_t)> emit = [&](size_t dim) {
+      if (dim == region.size()) {
+        body_builder(coords);
+        return;
+      }
+
+      const Range& current = region[dim];
+      mlir::Value lower = ZeroIndex();
+      mlir::Value extent = AsIndex(VisitExpr(current->extent), current->extent.dtype());
+      mlir::Value upper = extent;
+      mlir::Value step = ConstantIntLike(1, builder_.getIndexType());
+      mlir::scf::ForOp for_op = builder_.create<mlir::scf::ForOp>(loc_, lower, upper, step);
+
+      mlir::OpBuilder::InsertionGuard guard(builder_);
+      builder_.setInsertionPoint(for_op.getBody()->getTerminator());
+      coords.push_back(for_op.getInductionVar());
+      emit(dim + 1);
+      coords.pop_back();
+    };
+    emit(0);
+  }
+
+  mlir::Value OffsetIndex(mlir::Value coord, const PrimExpr& min) {
+    if (tir::is_zero(min)) {
+      return coord;
+    }
+    return builder_.create<mlir::arith::AddIOp>(loc_, coord, AsIndex(VisitExpr(min), min.dtype()));
+  }
+
+  llvm::SmallVector<mlir::Value, 4> LowerRegionIndices(
+      const tir::BufferRegion& region, llvm::ArrayRef<mlir::Value> coords) {
+    ICHECK_EQ(region->region.size(), coords.size());
+    llvm::SmallVector<mlir::Value, 4> indices;
+    indices.reserve(coords.size());
+    for (size_t i = 0; i < coords.size(); ++i) {
+      indices.push_back(OffsetIndex(coords[i], region->region[i]->min));
+    }
+    return indices;
+  }
+
+  bool RegionsHaveSameStaticExtents(const tir::BufferRegion& lhs, const tir::BufferRegion& rhs) {
+    if (lhs->region.size() != rhs->region.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < lhs->region.size(); ++i) {
+      if (!AreStaticEqual(lhs->region[i]->extent, rhs->region[i]->extent)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void LowerTileFill(const tir::CallNode* op) {
+    tir::BufferRegion dst_region = tl::NormalizeToBufferRegion(op->args[0]);
+    const tir::Buffer& dst_buffer = dst_region->buffer;
+    mlir::Value dst_memref = LookupBufferValue(dst_buffer);
+
+    EmitLoopNest(dst_region->region, [&](llvm::ArrayRef<mlir::Value> coords) {
+      llvm::SmallVector<mlir::Value, 4> dst_indices = LowerRegionIndices(dst_region, coords);
+      mlir::Value fill_value = VisitExpr(op->args[1]);
+      fill_value = CastValue(fill_value, op->args[1].dtype(), dst_buffer->dtype);
+      builder_.create<mlir::memref::StoreOp>(loc_, fill_value, dst_memref, dst_indices);
+    });
+  }
+
+  void LowerTileCopy(const tir::CallNode* op) {
+    tir::BufferRegion src_region = tl::NormalizeToBufferRegion(op->args[0]);
+    tir::BufferRegion dst_region = tl::NormalizeToBufferRegion(op->args[1]);
+    const tir::Buffer& src_buffer = src_region->buffer;
+    const tir::Buffer& dst_buffer = dst_region->buffer;
+    mlir::Value src_memref = LookupBufferValue(src_buffer);
+    mlir::Value dst_memref = LookupBufferValue(dst_buffer);
+
+    ICHECK_EQ(src_region->region.size(), dst_region->region.size())
+        << "tl.copy currently requires source and destination ranks to match";
+
+    if (src_buffer->dtype == dst_buffer->dtype && RegionsHaveSameStaticExtents(src_region, dst_region)) {
+      builder_.create<mlir::memref::CopyOp>(loc_, CreateSubview(src_region), CreateSubview(dst_region));
+      return;
+    }
+
+    EmitLoopNest(dst_region->region, [&](llvm::ArrayRef<mlir::Value> coords) {
+      llvm::SmallVector<mlir::Value, 4> src_indices;
+      src_indices.reserve(coords.size());
+      for (size_t i = 0; i < coords.size(); ++i) {
+        if (IsStaticOne(src_region->region[i]->extent)) {
+          src_indices.push_back(AsIndex(VisitExpr(src_region->region[i]->min),
+                                        src_region->region[i]->min.dtype()));
+          continue;
+        }
+        ICHECK(AreStaticEqual(src_region->region[i]->extent, dst_region->region[i]->extent))
+            << "tl.copy currently requires matching extents, except for static-1 broadcast";
+        src_indices.push_back(OffsetIndex(coords[i], src_region->region[i]->min));
+      }
+
+      llvm::SmallVector<mlir::Value, 4> dst_indices = LowerRegionIndices(dst_region, coords);
+      mlir::Value value = builder_.create<mlir::memref::LoadOp>(loc_, src_memref, src_indices);
+      value = CastValue(value, src_buffer->dtype, dst_buffer->dtype);
+      builder_.create<mlir::memref::StoreOp>(loc_, value, dst_memref, dst_indices);
+    });
+  }
+
+  bool LowerStatementLikeCall(const tir::CallNode* op) {
+    static const Op copy_op = Op::Get("tl.tileop.copy");
+    static const Op fill_op = Op::Get("tl.tileop.fill");
+    if (op->op.same_as(copy_op)) {
+      LowerTileCopy(op);
+      return true;
+    }
+    if (op->op.same_as(fill_op)) {
+      LowerTileFill(op);
+      return true;
+    }
+    return false;
   }
 
   void LowerFunction(const std::string& name, const tir::PrimFunc& func) {
@@ -478,6 +650,11 @@ private:
   }
 
   void VisitStmt_(const tir::EvaluateNode* op) final {
+    if (const auto* call = op->value.as<tir::CallNode>()) {
+      if (LowerStatementLikeCall(call)) {
+        return;
+      }
+    }
     if (!op->value.as<IntImmNode>() || !tir::is_zero(op->value)) {
       (void)VisitExpr(op->value);
     }
@@ -581,7 +758,22 @@ private:
     RestoreBindings(buffer_values_, saved_bindings);
   }
 
-  void VisitStmt_(const tir::AttrStmtNode* op) final { VisitStmt(op->body); }
+  void VisitStmt_(const tir::AttrStmtNode* op) final {
+    if (op->attr_key == tir::attr::thread_extent) {
+      const auto* iter_var = op->node.as<tir::IterVarNode>();
+      ICHECK(iter_var != nullptr)
+          << "thread_extent is expected to bind an IterVar in linalg_riscv lowering";
+      ICHECK(op->value.as<IntImmNode>() && op->value.as<IntImmNode>()->value == 1)
+          << "Only unit thread extents are supported in linalg_riscv lowering";
+      mlir::Type thread_type = LowerScalarType(iter_var->var.dtype());
+      SavedBinding saved =
+          SaveAndSet(scalar_values_, iter_var->var.get(), ConstantIntLike(0, thread_type));
+      VisitStmt(op->body);
+      RestoreBinding(scalar_values_, iter_var->var.get(), saved);
+      return;
+    }
+    VisitStmt(op->body);
+  }
 
   void VisitStmt_(const tir::BlockNode* op) final {
     ICHECK(!op->init.defined()) << "Reduction blocks are not supported yet in linalg_riscv lowering";
@@ -806,6 +998,7 @@ private:
   }
 
   mlir::DialectRegistry registry_;
+  arith::Analyzer analyzer_;
   mlir::MLIRContext context_;
   mlir::OpBuilder builder_;
   mlir::Location loc_;

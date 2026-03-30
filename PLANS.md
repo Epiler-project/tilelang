@@ -243,7 +243,11 @@ Recommended commit slicing:
     - `For -> scf.for`
     - `IfThenElse -> scf.if`
     - `AllocBuffer/BufferRealize/DeclBuffer -> memref.alloca`
+    - unit `thread_extent` / `T.Kernel(..., threads=1)` shell
+    - static compact row-major buffer parameters with explicit strides
     - simple contiguous `match_buffer -> memref.subview`
+    - `tl.tileop.copy -> memref.copy` or `scf + memref.load/store` fallback
+    - `tl.tileop.fill -> scf + memref.store` fallback
     - `BufferLoad/BufferStore -> memref.load/store`
     - simple reduction init fallback via `tir.transform.LowerInitBlock`
     - constants, casts, arithmetic, comparisons, `Select`
@@ -256,6 +260,8 @@ Recommended commit slicing:
     - local alloc-buffer staging
     - contiguous match-buffer subview
     - reduce-sum fallback
+    - TileLang `T.copy` kernel shell
+    - TileLang `T.clear` / fill kernel shell
 - next gap has shifted to Phase 2+:
   - broader region / subview / slice lowering beyond the simple contiguous case
   - native reduction recognition beyond `LowerInitBlock + scf` fallback
