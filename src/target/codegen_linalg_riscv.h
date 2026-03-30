@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <tvm/ir/module.h>
 #include <tvm/tir/function.h>
@@ -19,6 +21,7 @@ public:
   Array<String> GetFunctionNames() const { return function_names_; }
 
 private:
+  std::vector<std::pair<std::string, tir::PrimFunc>> functions_;
   Array<String> function_names_;
 };
 

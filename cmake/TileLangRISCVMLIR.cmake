@@ -79,5 +79,7 @@ function(tilelang_configure_riscv_mlir)
   set(TILELANG_RISCV_MLIR_ENABLED TRUE PARENT_SCOPE)
   set(TILELANG_RISCV_MLIR_ROOT "${_found_root}" PARENT_SCOPE)
   set(TILELANG_RISCV_MLIR_INCLUDE_DIRS "${_include_dirs}" PARENT_SCOPE)
-  set(TILELANG_RISCV_MLIR_LINK_LIBS "MLIRIR;MLIRFuncDialect" PARENT_SCOPE)
+  set(TILELANG_RISCV_MLIR_LINK_LIBS
+      "MLIRIR;MLIRFuncDialect;MLIRArithDialect;MLIRMemRefDialect;MLIRSCFDialect"
+      PARENT_SCOPE)
 endfunction()

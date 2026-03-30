@@ -227,12 +227,29 @@ Python DSL
 当前实现状态补充：
 
 - 当 `TILELANG_RISCV_MLIR_MODE=ON` 且 vendored LLVM/MLIR 已安装后，
-  `src/target/codegen_linalg_riscv.cc` 已经会使用真实 MLIR C++ API 构造最小
-  `module { func.func ... }` 骨架
+  `src/target/codegen_linalg_riscv.cc` 已经会使用真实 MLIR C++ API 构造
+  `mlir::ModuleOp`
 - `src/target/rt_mod_linalg_riscv.cc` 已经返回专用 `mlir` source module，
   不再复用 `CSourceModuleCreate(..., "mlir", ...)`
-- 这一步的目标只是替换“纯字符串拼接占位器”
-- 真正的 `memref/tensor/linalg/scf` 结构化 lowering 仍然属于后续任务
+- 当前已经打通的 structured lowering 子集包括：
+  - `PrimFunc` buffer/scalar 参数到 `func.func` 参数
+  - `BlockRealize/Block`
+  - `For -> scf.for`
+  - `IfThenElse -> scf.if`
+  - `AllocBuffer/BufferRealize/DeclBuffer -> memref.alloca`
+  - `BufferLoad/BufferStore -> memref.load/store`
+  - 常量、`Cast`、`Add/Sub/Mul/Div`、比较、`Select`
+- 已有自动化样例覆盖：
+  - simple copy
+  - elementwise add
+  - scalar-param saxpy
+  - if-guarded store
+  - local `alloc_buffer` staging
+- 仍然属于后续任务的部分主要是：
+  - `match_buffer` / region / `memref.subview`
+  - reduction block / `T.init`
+  - `linalg.generic`、`linalg.reduce`
+  - `tl.gemm -> linalg.matmul`
 
 
 ## 6. 切入点设计

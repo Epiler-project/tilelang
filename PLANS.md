@@ -229,16 +229,34 @@ Recommended commit slicing:
 ### Current status snapshot
 
 - Phase 0 target plumbing is landed
-- Phase 1 infrastructure is partially landed:
+- Phase 1 core scaffolding is landed:
   - vendored `llvm-project` submodule
   - deterministic build script
   - Python toolchain discovery helpers
   - top-level CMake gating for vendored MLIR
-  - minimal C++ MLIR builder that emits `module { func.func ... }`
+  - real C++ MLIR builder using vendored MLIR dialect APIs
   - `tilelang.tladapter.Pipeline` backed by vendored `mlir-opt`
   - dedicated `mlir` source runtime module for `linalg_riscv`
-- remaining Phase 1 gap:
-  - begin real `memref/tensor/linalg/scf` lowering instead of function-name-only scaffolding
+  - structured lowering currently covers:
+    - `PrimFunc` buffer/scalar params -> `func.func` args
+    - `BlockRealize/Block`
+    - `For -> scf.for`
+    - `IfThenElse -> scf.if`
+    - `AllocBuffer/BufferRealize/DeclBuffer -> memref.alloca`
+    - `BufferLoad/BufferStore -> memref.load/store`
+    - constants, casts, arithmetic, comparisons, `Select`
+  - automated coverage currently includes:
+    - tiny kernel shell
+    - copy loop
+    - elementwise add
+    - scalar-param saxpy
+    - if-guarded store
+    - local alloc-buffer staging
+- next gap has shifted to Phase 2+:
+  - `match_buffer` / region / subview lowering
+  - reduction blocks with `T.init`
+  - `linalg.generic` / `linalg.reduce`
+  - `tl.gemm -> linalg.matmul`
 
 ## Phase 0: Freeze Scope And Scaffolding
 
@@ -334,6 +352,11 @@ Only support:
   - `scf.for`
   - `memref.load`
   - `memref.store`
+
+Status:
+
+- achieved for the current MVP subset
+- follow-up work now focuses on region/reduction/linalg pattern lifting, not on basic MLIR construction anymore
 
 ## Phase 2: Region, Copy, Elementwise, Reduction
 
