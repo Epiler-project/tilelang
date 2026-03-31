@@ -10,7 +10,7 @@ TileLang DSL
   -> memref + tensor + linalg + scf + bufferization
   -> vector
   -> llvm
-  -> RISC-V / RVV
+  -> RISC-V CPU
 ```
 
 这条路线的核心目标不是替代现有 CUDA/HIP backend，而是为 `tilelang-riscv` 提供一条适合 CPU/RISC-V 的、结构化的、可复用 MLIR 基础设施的 lowering 路径。
@@ -434,8 +434,8 @@ Python DSL
   - dynamic grouped GEMM coverage on the host path
     - `examples/riscv/example_dynamic_grouped_gemm.py` is landed as a backend-neutral Tier 2
       example
-    - runtime `Offsets` / `Sizes` tensors drive three grouped slices, each lowering through its
-      own `linalg.matmul`
+    - compile-time fixed group loops plus runtime `Offsets` / `Sizes` tensors now lower as a
+      single `scf.for`-driven grouped dispatch with symbolic slices inside the loop body
     - direct `tilelang.compile(..., target="riscv")` dynamic grouped-gemm kernels are covered by
       MLIR, host-runtime, and example tests
   - local regression status on this machine:
@@ -462,7 +462,8 @@ Python DSL
       的规则表达式
     - 更一般的 mixed indexing / gather-scatter / predicated elementwise 仍未结构化
   - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched slice
-  - fully dynamic grouped-gemm dispatch beyond the current fixed-3-group offsets/sizes form
+  - grouped-gemm dispatch beyond the current compile-time-fixed group-count plus runtime
+    `Offsets` / `Sizes` form
 
 
 ## 6. 切入点设计
@@ -497,8 +498,13 @@ Python DSL
 
 可选保留：
 
-- `LegalizeSafeMemoryAccess`
 - `HoistNonRestrictParams`
+
+当前 `linalg_riscv` 实现中应显式跳过：
+
+- `LegalizeSafeMemoryAccess`
+  - 否则 loop-indexed slice 的动态 extent 会被改写成嵌套 `if_then_else`
+  - 会破坏 `match_buffer` / `memref.subview` 的形状等价关系
 
 建议跳过：
 
@@ -757,7 +763,8 @@ convert-func-to-llvm
 reconcile-unrealized-casts
 ```
 
-如果目标是充分利用 RVV，则中间阶段应尽量保留 `vector`，避免过早转 loops。
+当前完成标准不包含 RVV/vector 优化；现阶段默认优先 `linalg -> loops` 的 correctness
+路径，必要时再讨论后续向 `vector` 路线扩展。
 
 ### 9.2 两条后端策略
 
@@ -767,14 +774,14 @@ reconcile-unrealized-casts
   - 更容易调试
   - 先求功能正确
 - 路线 B：`linalg -> vector -> llvm`
-  - 更适合 RVV
-  - 也是长期推荐路线
+  - 属于后续资料与研究方向
+  - 不纳入当前 MVP 完成标准
 
-MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
+MVP 建议先打通路线 A；路线 B 不在本轮任务范围内。
 
-### 9.3 RVV 对接建议
+### 9.3 向量化后续说明
 
-对 RISC-V 的长期目标，应尽量让：
+以下内容仅作为后续资料，不属于当前设计交付范围：
 
 - `linalg.matmul`
 - `linalg.generic`
@@ -787,7 +794,7 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
 - `vector.contract`
 - `vector.reduction`
 
-再依赖 LLVM/MLIR 的 RISC-V backend 做 RVV lowering。
+再依赖 LLVM/MLIR 的 RISC-V backend 做向量 lowering。
 
 
 ## 10. 工程改动清单
@@ -944,7 +951,7 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
 测试：
 
 - host 模拟
-- qemu / spike / rv64 仿真
+- 可选的 freestanding 仿真辅助能力
 
 当前阶段补充：
 
@@ -972,17 +979,16 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
   - `--emit-object`
   - `--run-host`
   - `--run-qemu`
-- `--run-qemu` 当前通过 freestanding RISC-V harness 执行：
+- `--run-qemu` 仅保留为可选的 freestanding helper：
   - 默认查找 `qemu-riscv64`
   - 或使用 `TILELANG_RISCV_RUNNER` 覆盖，例如 `spike pk`
-  - 当前仓库内已补充 freestanding ELF build 测试与可选的 qemu smoke test
-  - 但这台机器仍缺 qemu/spike 运行环境，所以真实仿真执行暂时只能在有 runner 的机器上验证
+  - 当前任务的完成标准不要求 dedicated qemu/spike 环境验证
 
 ### 阶段 4：性能优化
 
 目标：
 
-- 利用 `vector` 与 RVV 做性能优化
+- 不纳入当前交付范围；如后续需要，可另起性能专题
 
 实现：
 
@@ -1092,7 +1098,7 @@ MVP 首先应该追求：
 - IR 正确
 - 编译链打通
 
-而不是一开始就追求 RVV 极致性能。
+而不是一开始就追求向量化极致性能。
 
 
 ## 15. 测试计划

@@ -151,7 +151,10 @@ def LowerAndLegalizeForRISCV(mod: IRModule, target: Target) -> IRModule:
         mod = tilelang.transform.VerifyParallelLoop()(mod)
     mod = tilelang.transform.InjectAssumes()(mod)
     mod = tilelang.transform.Simplify()(mod)
-    mod = tilelang.transform.LegalizeSafeMemoryAccess()(mod)
+    # Preserve symbolic slice extents for structured MLIR lowering.
+    # The generic safe-memory pass rewrites dynamic buffer indices into nested
+    # if_then_else expressions, which breaks match_buffer/subview shape equality
+    # for loop-indexed slices such as grouped dispatch.
     mod = tilelang.transform.LowerAccessPtr()(mod)
     mod = tilelang.transform.Simplify()(mod)
     mod = tilelang.transform.HoistNonRestrictParams()(mod)

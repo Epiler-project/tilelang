@@ -32,6 +32,7 @@
 
 #include <tvm/arith/analyzer.h>
 #include <tvm/ir/attrs.h>
+#include <tvm/tir/analysis.h>
 #include <tvm/tir/op.h>
 #include <tvm/tir/stmt_functor.h>
 
@@ -136,6 +137,11 @@ private:
     const tir::BufferStoreNode* store{nullptr};
     llvm::SmallVector<tir::Var, 4> block_vars;
     std::vector<tir::Buffer> input_buffers;
+  };
+
+  struct DeferredLoopBindings {
+    llvm::SmallVector<tir::Buffer, 4> alloc_buffers;
+    llvm::SmallVector<tir::MatchBufferRegion, 4> match_buffers;
   };
 
   struct StructuredIndexPattern {
@@ -759,6 +765,73 @@ private:
     }
     return (ExprMatchesVar(eq->a, var) && IsZeroValue(eq->b)) ||
            (ExprMatchesVar(eq->b, var) && IsZeroValue(eq->a));
+  }
+
+  bool ExprUsesVar(const PrimExpr& expr, const tir::Var& var) const {
+    return tir::UsesVar(expr, [target = var.get()](const tir::VarNode* candidate) {
+      return candidate == target;
+    });
+  }
+
+  bool BufferUsesVar(const tir::Buffer& buffer, const tir::Var& var) const {
+    for (const PrimExpr& dim : buffer->shape) {
+      if (ExprUsesVar(dim, var)) {
+        return true;
+      }
+    }
+    for (const PrimExpr& stride : buffer->strides) {
+      if (ExprUsesVar(stride, var)) {
+        return true;
+      }
+    }
+    return ExprUsesVar(buffer->elem_offset, var);
+  }
+
+  bool MatchBufferUsesVar(const tir::MatchBufferRegion& match_buffer, const tir::Var& var) const {
+    if (BufferUsesVar(match_buffer->buffer, var)) {
+      return true;
+    }
+    for (const Range& range : match_buffer->source->region) {
+      if (ExprUsesVar(range->min, var) || ExprUsesVar(range->extent, var)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void PushDeferredLoopBindings(const tir::Var& loop_var, DeferredLoopBindings bindings) {
+    deferred_loop_bindings_[loop_var.get()].push_back(std::move(bindings));
+  }
+
+  void PopDeferredLoopBindings(const tir::Var& loop_var) {
+    auto it = deferred_loop_bindings_.find(loop_var.get());
+    ICHECK(it != deferred_loop_bindings_.end() && !it->second.empty());
+    it->second.pop_back();
+    if (it->second.empty()) {
+      deferred_loop_bindings_.erase(it);
+    }
+  }
+
+  const tir::ForNode* FindDeferredBindingLoop(const tir::Stmt& stmt) const {
+    tir::Stmt current = stmt;
+    while (current.defined()) {
+      if (const auto* for_node = current.as<tir::ForNode>()) {
+        return for_node;
+      }
+      if (const auto* attr = current.as<tir::AttrStmtNode>()) {
+        current = attr->body;
+        continue;
+      }
+      if (const auto* seq = current.as<tir::SeqStmtNode>()) {
+        if (seq->seq.size() != 1) {
+          return nullptr;
+        }
+        current = seq->seq[0];
+        continue;
+      }
+      return nullptr;
+    }
+    return nullptr;
   }
 
   bool MatchesBufferLoad(const PrimExpr& expr, const tir::Buffer& buffer,
@@ -1954,7 +2027,23 @@ private:
     {
       mlir::OpBuilder::InsertionGuard guard(builder_);
       builder_.setInsertionPoint(for_op.getBody()->getTerminator());
+      std::vector<std::pair<const Object*, SavedBinding>> saved_bindings;
+      auto deferred_it = deferred_loop_bindings_.find(op->loop_var.get());
+      if (deferred_it != deferred_loop_bindings_.end() && !deferred_it->second.empty()) {
+        const DeferredLoopBindings& deferred = deferred_it->second.back();
+        saved_bindings.reserve(deferred.alloc_buffers.size() * 2 + deferred.match_buffers.size() * 2);
+        for (const tir::Buffer& buffer : deferred.alloc_buffers) {
+          ValidateContiguousBuffer(buffer);
+          mlir::Value alloc = CreateAlloca(buffer->shape, buffer->dtype);
+          BindBufferAliases(buffer, alloc, &saved_bindings);
+        }
+        for (const tir::MatchBufferRegion& match_buffer : deferred.match_buffers) {
+          mlir::Value subview = CreateSubview(match_buffer);
+          BindBufferAliases(match_buffer->buffer, subview, &saved_bindings);
+        }
+      }
       VisitStmt(op->body);
+      RestoreBindings(buffer_values_, saved_bindings);
     }
     RestoreBinding(scalar_values_, op->loop_var.get(), saved_loop_var);
   }
@@ -2054,19 +2143,39 @@ private:
   void VisitStmt_(const tir::BlockNode* op) final {
     ICHECK(!op->init.defined()) << "Reduction blocks are not supported yet in linalg_riscv lowering";
 
+    const auto* body_for = FindDeferredBindingLoop(op->body);
     std::vector<std::pair<const Object*, SavedBinding>> saved_bindings;
+    DeferredLoopBindings deferred;
     saved_bindings.reserve(op->alloc_buffers.size() * 2 + op->match_buffers.size() * 2);
     for (const tir::Buffer& buffer : op->alloc_buffers) {
+      if (body_for != nullptr && scalar_values_.count(body_for->loop_var.get()) == 0 &&
+          BufferUsesVar(buffer, body_for->loop_var)) {
+        deferred.alloc_buffers.push_back(buffer);
+        continue;
+      }
       ValidateContiguousBuffer(buffer);
       mlir::Value alloc = CreateAlloca(buffer->shape, buffer->dtype);
       BindBufferAliases(buffer, alloc, &saved_bindings);
     }
     for (const tir::MatchBufferRegion& match_buffer : op->match_buffers) {
+      if (body_for != nullptr && scalar_values_.count(body_for->loop_var.get()) == 0 &&
+          MatchBufferUsesVar(match_buffer, body_for->loop_var)) {
+        deferred.match_buffers.push_back(match_buffer);
+        continue;
+      }
       mlir::Value subview = CreateSubview(match_buffer);
       BindBufferAliases(match_buffer->buffer, subview, &saved_bindings);
     }
 
+    if (body_for != nullptr &&
+        (!deferred.alloc_buffers.empty() || !deferred.match_buffers.empty())) {
+      PushDeferredLoopBindings(body_for->loop_var, deferred);
+    }
     VisitStmt(op->body);
+    if (body_for != nullptr &&
+        (!deferred.alloc_buffers.empty() || !deferred.match_buffers.empty())) {
+      PopDeferredLoopBindings(body_for->loop_var);
+    }
     RestoreBindings(buffer_values_, saved_bindings);
   }
 
@@ -2358,6 +2467,7 @@ private:
   mlir::ModuleOp module_;
   ValueMap scalar_values_;
   ValueMap buffer_values_;
+  std::unordered_map<const Object*, std::vector<DeferredLoopBindings>> deferred_loop_bindings_;
 };
 
 std::string BuildStructuredMLIRModule(const std::vector<FunctionEntry>& functions) {

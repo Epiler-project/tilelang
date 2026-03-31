@@ -366,41 +366,26 @@ def tile_dynamic_grouped_gemm(
     C: T.Tensor((GROUP_TOTAL_DYNAMIC, GROUP_N), "float32"),
 ):
     with T.Kernel(1, threads=1):
-        A0 = T.match_buffer(A[Offsets[0] : Offsets[0] + Sizes[0], 0:GROUP_K], (Sizes[0], GROUP_K), dtype="float32")
-        B0 = T.match_buffer(B[0, 0:GROUP_K, 0:GROUP_N], (GROUP_K, GROUP_N), dtype="float32")
-        C0 = T.match_buffer(C[Offsets[0] : Offsets[0] + Sizes[0], 0:GROUP_N], (Sizes[0], GROUP_N), dtype="float32")
-        A0_shared = T.alloc_shared((Sizes[0], GROUP_K), "float32")
-        B0_shared = T.alloc_shared((GROUP_K, GROUP_N), "float32")
-        C0_local = T.alloc_fragment((Sizes[0], GROUP_N), "float32")
-        T.copy(A0, A0_shared)
-        T.copy(B0, B0_shared)
-        T.clear(C0_local)
-        T.gemm(A0_shared, B0_shared, C0_local)
-        T.copy(C0_local, C0)
-
-        A1 = T.match_buffer(A[Offsets[1] : Offsets[1] + Sizes[1], 0:GROUP_K], (Sizes[1], GROUP_K), dtype="float32")
-        B1 = T.match_buffer(B[1, 0:GROUP_K, 0:GROUP_N], (GROUP_K, GROUP_N), dtype="float32")
-        C1 = T.match_buffer(C[Offsets[1] : Offsets[1] + Sizes[1], 0:GROUP_N], (Sizes[1], GROUP_N), dtype="float32")
-        A1_shared = T.alloc_shared((Sizes[1], GROUP_K), "float32")
-        B1_shared = T.alloc_shared((GROUP_K, GROUP_N), "float32")
-        C1_local = T.alloc_fragment((Sizes[1], GROUP_N), "float32")
-        T.copy(A1, A1_shared)
-        T.copy(B1, B1_shared)
-        T.clear(C1_local)
-        T.gemm(A1_shared, B1_shared, C1_local)
-        T.copy(C1_local, C1)
-
-        A2 = T.match_buffer(A[Offsets[2] : Offsets[2] + Sizes[2], 0:GROUP_K], (Sizes[2], GROUP_K), dtype="float32")
-        B2 = T.match_buffer(B[2, 0:GROUP_K, 0:GROUP_N], (GROUP_K, GROUP_N), dtype="float32")
-        C2 = T.match_buffer(C[Offsets[2] : Offsets[2] + Sizes[2], 0:GROUP_N], (Sizes[2], GROUP_N), dtype="float32")
-        A2_shared = T.alloc_shared((Sizes[2], GROUP_K), "float32")
-        B2_shared = T.alloc_shared((GROUP_K, GROUP_N), "float32")
-        C2_local = T.alloc_fragment((Sizes[2], GROUP_N), "float32")
-        T.copy(A2, A2_shared)
-        T.copy(B2, B2_shared)
-        T.clear(C2_local)
-        T.gemm(A2_shared, B2_shared, C2_local)
-        T.copy(C2_local, C2)
+        for group_idx in T.serial(GROUP_COUNT_DYNAMIC):
+            A_group = T.match_buffer(
+                A[Offsets[group_idx] : Offsets[group_idx] + Sizes[group_idx], 0:GROUP_K],
+                (Sizes[group_idx], GROUP_K),
+                dtype="float32",
+            )
+            B_group = T.match_buffer(B[group_idx, 0:GROUP_K, 0:GROUP_N], (GROUP_K, GROUP_N), dtype="float32")
+            C_group = T.match_buffer(
+                C[Offsets[group_idx] : Offsets[group_idx] + Sizes[group_idx], 0:GROUP_N],
+                (Sizes[group_idx], GROUP_N),
+                dtype="float32",
+            )
+            A_shared = T.alloc_shared((Sizes[group_idx], GROUP_K), "float32")
+            B_shared = T.alloc_shared((GROUP_K, GROUP_N), "float32")
+            C_local = T.alloc_fragment((Sizes[group_idx], GROUP_N), "float32")
+            T.copy(A_group, A_shared)
+            T.copy(B_group, B_shared)
+            T.clear(C_local)
+            T.gemm(A_shared, B_shared, C_local)
+            T.copy(C_local, C_group)
 
 
 def test_tilelang_compile_runs_riscv_host_adapter_with_dynamic_grouped_gemm():
@@ -425,7 +410,8 @@ def test_tilelang_compile_runs_riscv_host_adapter_with_dynamic_grouped_gemm():
     kernel.close()
 
     assert "func.func @tile_dynamic_grouped_gemm" in source
-    assert source.count("linalg.matmul") == GROUP_COUNT_DYNAMIC
+    assert "scf.for" in source
+    assert source.count("linalg.matmul") == 1
     assert "memref<3xi32>" in source
     torch.testing.assert_close(out, ref)
 

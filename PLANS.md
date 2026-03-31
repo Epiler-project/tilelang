@@ -66,10 +66,7 @@ The project is considered complete for MVP when all items below are true.
   - `.ll`
   - `.s`
   - `.o`
-- at least one functional path is runnable:
-  - host simulation path, or
-  - `qemu-riscv64`, or
-  - `spike`
+- the local host simulation path is runnable
 - there are automated tests under `testing/python/riscv/`
 - there are runnable examples under `examples/riscv/`
 - the repo documents a portable coverage matrix derived from original `examples/`
@@ -152,8 +149,7 @@ Do not start implementation before the toolchain is fixed.
 - RISC-V backend enabled in LLVM
 - Python package support for the MLIR binding/driver layer
 - one runtime path for execution:
-  - `qemu-riscv64`, or
-  - `spike`
+  - native x86 host simulation through the flattened memref ABI
 
 ### Recommended environment variables
 
@@ -169,6 +165,7 @@ export TILELANG_RISCV_ATTRS='+m,+a,+f,+d,+c,+v'
 export TILELANG_RISCV_ABI=lp64d
 export TILELANG_RISCV_SYSROOT=/opt/riscv/sysroot
 
+# Optional only: freestanding simulator execution is not part of MVP DoD.
 export TILELANG_RISCV_RUNNER=qemu-riscv64
 export TILELANG_RISCV_RUNNER_FLAGS='-L /opt/riscv/sysroot'
 ```
@@ -203,7 +200,6 @@ mlir-opt --version
 mlir-translate --version
 llc --version | rg riscv
 clang --version
-qemu-riscv64 --version
 ```
 
 The Python-side discovery layer should also succeed:
@@ -232,7 +228,7 @@ Recommended commit slicing:
 5. elementwise and reduction lowering
 6. `tl.gemm -> linalg.matmul`
 7. MLIR pipeline and artifact export
-8. RISC-V runner integration
+8. host/runtime adapter surface
 9. tests and examples
 
 ## 7. Phase Plan
@@ -366,7 +362,8 @@ Recommended commit slicing:
     - additive expression reductions with identity + output-broadcast inputs
   - broader `linalg.generic` / `linalg.reduce` coverage beyond the current simple cases
   - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched case
-  - fully dynamic grouped-gemm dispatch beyond the current fixed-3-group offsets/sizes form
+  - grouped-gemm dispatch beyond the current compile-time-fixed group-count plus runtime
+    `Offsets` / `Sizes` form
   - local `pytest testing/python/riscv -q` also requires a built TileLang/TVM Python environment with `tvm_ffi` importable
 
 ## Phase 0: Freeze Scope And Scaffolding
@@ -420,8 +417,10 @@ Make `lower(..., target="riscv")` build a real MLIR module in C++ and expose a p
   - `VerifyParallelLoop`
   - `InjectAssumes`
   - `Simplify`
-  - optionally `LegalizeSafeMemoryAccess`
   - optionally `HoistNonRestrictParams`
+- intentionally skip `LegalizeSafeMemoryAccess` on `linalg_riscv`
+  - preserve symbolic slice extents for loop-indexed `match_buffer` / `alloc_buffer`
+  - avoid rewriting dynamic bounds into nested `if_then_else` expressions before MLIR codegen
 - explicitly skip GPU passes:
   - `LayoutInference`
   - `LowerTileOp`
@@ -578,7 +577,7 @@ convert-cf-to-llvm
 reconcile-unrealized-casts
 ```
 
-- optimized vector/RVV path remains a follow-up after correctness/examples stabilize
+- vector/RVV-oriented optimization remains outside the current completion target
 
 - add export helpers for:
   - `emit_mlir()`
@@ -596,7 +595,7 @@ reconcile-unrealized-casts
 - the pipeline produces valid `.ll`
 - `llc` can produce RISC-V asm
 - `clang --target=${TILELANG_RISCV_TRIPLE}` can link a small object if a runtime harness is supplied
-- freestanding qemu/spike runner path expects `ld.lld` or another RISC-V-capable linker
+- optional freestanding simulator tooling expects `ld.lld` or another RISC-V-capable linker
 - `load_host_module()` can compile the same `.ll` into a native host `.so`
 - a tiny copy kernel runs correctly on local x86 CPU through the flattened memref ABI
 
@@ -612,9 +611,9 @@ Run a curated set of backend-neutral examples end to end.
   - `tilelang/jit/adapter/riscv/adapter.py`
   - `tilelang/jit/adapter/riscv/wrapper.py`
 - do not aim for full PyTorch runtime integration first
-- support two execution modes:
+- support one required execution mode:
   - host simulation
-  - qemu/spike execution
+- keep qemu/spike helpers as optional tooling only
 - current landed runner surface:
   - `load_host_module()` for NumPy/x86 host simulation
   - `RiscvKernelAdapter` for a lightweight CPU-torch-facing wrapper over the same host path
@@ -646,12 +645,10 @@ Run a curated set of backend-neutral examples end to end.
     - `examples/riscv/example_topk.py`
     - `examples/riscv/example_convolution.py`
   - local host execution is wired and tested
-  - `--run-qemu` now builds a freestanding RISC-V ELF and runs it through:
-    - `qemu-riscv64` by default, or
-    - `TILELANG_RISCV_RUNNER` such as `spike pk`
+  - `--run-qemu` remains available as an optional freestanding helper when an external
+    simulator environment exists
   - current automated coverage includes:
     - freestanding ELF build validation on this machine
-    - qemu smoke coverage when a simulator is available
     - host/artifact coverage for `example_dynamic_shape.py`
     - host/artifact coverage for `example_rms_norm.py`
     - host/artifact coverage for `example_online_softmax.py`
@@ -672,6 +669,11 @@ Run a curated set of backend-neutral examples end to end.
     - `tilelang.compile(..., target="riscv")` dynamic grouped GEMM host execution
     - full `testing/python/riscv` regression currently passes on this machine:
       `80 passed, 1 skipped`
+  - dynamic grouped GEMM lowering status:
+    - compile-time fixed group loops plus runtime `Offsets` / `Sizes` now lower as a single
+      `scf.for`-driven grouped dispatch
+    - loop-indexed `match_buffer` / `alloc_buffer` bindings are deferred until the loop body so
+      symbolic slice extents stay valid for `memref.subview` and `linalg.matmul`
   - dynamic-shape lowering status:
     - buffer shape vars are rebound from function memrefs via `memref.dim`
     - symbolic compact row-major strides remain accepted in the JIT path
@@ -1065,8 +1067,8 @@ python examples/riscv/example_matmul.py --run-qemu
 
 ## 15. Final MVP Checklist
 
-- [ ] `riscv` target alias exists
-- [ ] `linalg_riscv` target kind is wired through Python and C++
+- [x] `riscv` target alias exists
+- [x] `linalg_riscv` target kind is wired through Python and C++
 - [x] RISC-V path uses dedicated lowering phases
 - [x] MLIR emission works for loops, conditionals, loads, stores, allocs
 - [x] region/subview lowering works
@@ -1087,9 +1089,8 @@ Do not include these in the first implementation wave.
 
 - batch matmul
 - transpose-aware GEMM legalization
-- dynamic shape heavy kernels
+- truly dynamic group-count dispatch beyond compile-time-fixed grouped loops
 - vector.contract tuning
-- RVV-specific tiling heuristics
 - broader JIT runtime integration
 - autotuning support for RISC-V
 - benchmark suite and performance dashboards
