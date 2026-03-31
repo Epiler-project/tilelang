@@ -588,7 +588,6 @@ Run a curated set of backend-neutral examples end to end.
   - `examples/riscv/example_reduce_sum.py`
   - `examples/riscv/example_matmul.py`
 - define the next portable expansion set from original `examples/`:
-  - `examples/topk/example_topk.py`
   - `examples/convolution/example_convolution.py`
   - `examples/dynamic_shape/example_dynamic.py`
 - each example should support:
@@ -601,6 +600,7 @@ Run a curated set of backend-neutral examples end to end.
   - Tier 1 portable ports landed:
     - `examples/riscv/example_rms_norm.py`
     - `examples/riscv/example_online_softmax.py`
+    - `examples/riscv/example_topk.py`
   - local host execution is wired and tested
   - `--run-qemu` now builds a freestanding RISC-V ELF and runs it through:
     - `qemu-riscv64` by default, or
@@ -610,6 +610,7 @@ Run a curated set of backend-neutral examples end to end.
     - qemu smoke coverage when a simulator is available
     - host/artifact coverage for `example_rms_norm.py`
     - host/artifact coverage for `example_online_softmax.py`
+    - host/artifact coverage for `example_topk.py`
   - broader completeness work should port the portable expansion set into backend-neutral
     `examples/riscv/` style entry points instead of trying to reuse the original GPU-oriented
     scripts unchanged
@@ -854,8 +855,8 @@ Treat the original examples in three tiers:
   - current landed portable ports:
     - `examples/riscv/example_rms_norm.py`
     - `examples/riscv/example_online_softmax.py`
+    - `examples/riscv/example_topk.py`
   - next implementation order after the current landed ports:
-    - `examples/topk/example_topk.py`
     - `examples/convolution/example_convolution.py`
     - `examples/dynamic_shape/example_dynamic.py`
   - `examples/elementwise/example_elementwise_add.py` and `examples/gemm/example_gemm.py`
