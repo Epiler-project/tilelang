@@ -21,6 +21,7 @@ EXAMPLES = (
     "example_matmul.py",
     "example_gemv.py",
     "example_batched_gemm.py",
+    "example_grouped_gemm.py",
     "example_dynamic_shape.py",
     "example_rms_norm.py",
     "example_online_softmax.py",

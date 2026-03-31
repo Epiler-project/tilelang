@@ -384,6 +384,7 @@ Python DSL
   - `examples/riscv/example_matmul.py`
   - `examples/riscv/example_batched_gemm.py`
   - `examples/riscv/example_gemv.py`
+  - `examples/riscv/example_grouped_gemm.py`
   - `examples/riscv/example_dynamic_shape.py`
   - `examples/riscv/example_rms_norm.py`
   - `examples/riscv/example_online_softmax.py`
@@ -424,8 +425,13 @@ Python DSL
     - `examples/riscv/example_gemv.py` is landed as a backend-neutral Tier 2 example
     - direct `tilelang.compile(..., target="riscv")` GEMV kernels with `(K, 1)` operands are
       covered by MLIR, host-runtime, and example tests
+  - compile-time grouped GEMM coverage on the host path
+    - `examples/riscv/example_grouped_gemm.py` is landed as a backend-neutral Tier 2 example
+    - each group is expanded as a static slice and lowered through its own `linalg.matmul`
+    - direct `tilelang.compile(..., target="riscv")` grouped-gemm kernels are covered by MLIR,
+      host-runtime, and example tests
   - local regression status on this machine:
-    - `python -m pytest testing/python/riscv -q` passes with `72 passed, 1 skipped`
+    - `python -m pytest testing/python/riscv -q` passes with `76 passed, 1 skipped`
 - 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
 - 仍然属于后续任务的部分主要是：
   - 将 Tier 1 portable suite 固化成更稳定的长期验收矩阵与持续扩展入口
@@ -448,6 +454,7 @@ Python DSL
       的规则表达式
     - 更一般的 mixed indexing / gather-scatter / predicated elementwise 仍未结构化
   - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched slice
+  - fully dynamic grouped-gemm dispatch beyond the current compile-time fixed group slices
   - 更广的 qemu / spike / rv64 smoke 覆盖
   - RVV 优化路径与向量化收益验证
   - 当前机器缺少 `qemu-riscv64` / `spike` / `pk`，因此真实 RISC-V runner 还缺运行环境验证

@@ -14,6 +14,10 @@ N = 8
 M_DYNAMIC = T.dynamic("m")
 N_DYNAMIC = T.dynamic("n")
 K_DYNAMIC = T.dynamic("k")
+GROUP_SIZES_GROUPED_GEMM = (2, 3)
+GROUP_TOTAL_GROUPED_GEMM = sum(GROUP_SIZES_GROUPED_GEMM)
+GROUP_K = 4
+GROUP_N = 5
 
 
 @T.prim_func
@@ -290,6 +294,65 @@ def test_tilelang_compile_runs_riscv_host_adapter_with_gemv_shape():
     assert "func.func @tile_gemv_vector_operand" in source
     assert "linalg.matmul" in source
     torch.testing.assert_close(out, matrix @ vector)
+
+
+@T.macro
+def tile_grouped_gemm_step(A, B, C, group_idx, row_offset, group_rows):
+    A_group = T.match_buffer(
+        A[row_offset : row_offset + group_rows, 0:GROUP_K], (group_rows, GROUP_K), dtype="float32"
+    )
+    B_group = T.match_buffer(B[group_idx, 0:GROUP_K, 0:GROUP_N], (GROUP_K, GROUP_N), dtype="float32")
+    C_group = T.match_buffer(
+        C[row_offset : row_offset + group_rows, 0:GROUP_N], (group_rows, GROUP_N), dtype="float32"
+    )
+    A_shared = T.alloc_shared((group_rows, GROUP_K), "float32")
+    B_shared = T.alloc_shared((GROUP_K, GROUP_N), "float32")
+    C_local = T.alloc_fragment((group_rows, GROUP_N), "float32")
+    T.copy(A_group, A_shared)
+    T.copy(B_group, B_shared)
+    T.clear(C_local)
+    T.gemm(A_shared, B_shared, C_local)
+    T.copy(C_local, C_group)
+
+
+@T.prim_func
+def tile_grouped_gemm_portable(
+    A: T.Tensor((GROUP_TOTAL_GROUPED_GEMM, GROUP_K), "float32"),
+    B: T.Tensor((len(GROUP_SIZES_GROUPED_GEMM), GROUP_K, GROUP_N), "float32"),
+    C: T.Tensor((GROUP_TOTAL_GROUPED_GEMM, GROUP_N), "float32"),
+):
+    with T.Kernel(1, threads=1):
+        tile_grouped_gemm_step(A, B, C, 0, 0, GROUP_SIZES_GROUPED_GEMM[0])
+        tile_grouped_gemm_step(
+            A, B, C, 1, GROUP_SIZES_GROUPED_GEMM[0], GROUP_SIZES_GROUPED_GEMM[1]
+        )
+
+
+def test_tilelang_compile_runs_riscv_host_adapter_with_grouped_gemm():
+    kernel = tilelang.compile(tile_grouped_gemm_portable, out_idx=[2], target="riscv")
+
+    lhs = torch.arange(GROUP_TOTAL_GROUPED_GEMM * GROUP_K, dtype=torch.float32).reshape(
+        GROUP_TOTAL_GROUPED_GEMM, GROUP_K
+    )
+    rhs = torch.arange(
+        len(GROUP_SIZES_GROUPED_GEMM) * GROUP_K * GROUP_N, dtype=torch.float32
+    ).reshape(len(GROUP_SIZES_GROUPED_GEMM), GROUP_K, GROUP_N)
+    out = kernel(lhs, rhs)
+
+    refs = []
+    row_offset = 0
+    for group_idx, group_rows in enumerate(GROUP_SIZES_GROUPED_GEMM):
+        refs.append(lhs[row_offset : row_offset + group_rows] @ rhs[group_idx])
+        row_offset += group_rows
+    ref = torch.cat(refs, dim=0)
+
+    source = kernel.get_kernel_source()
+    kernel.close()
+
+    assert "func.func @tile_grouped_gemm_portable" in source
+    assert source.count("linalg.matmul") == len(GROUP_SIZES_GROUPED_GEMM)
+    assert "memref.subview" in source
+    torch.testing.assert_close(out, ref)
 
 
 @T.prim_func

@@ -626,6 +626,38 @@ def test_riscv_codegen_lowers_tilelang_gemv_via_singleton_dim_gemm():
     assert "memref<6x1xf32>" in source
 
 
+def test_riscv_codegen_lowers_portable_grouped_gemm():
+    @T.macro
+    def grouped_gemm_step(A, B, C, group_idx, row_offset, group_rows):
+        A_group = T.match_buffer(A[row_offset : row_offset + group_rows, 0:4], (group_rows, 4), dtype="float32")
+        B_group = T.match_buffer(B[group_idx, 0:4, 0:5], (4, 5), dtype="float32")
+        C_group = T.match_buffer(C[row_offset : row_offset + group_rows, 0:5], (group_rows, 5), dtype="float32")
+        A_shared = T.alloc_shared((group_rows, 4), "float32")
+        B_shared = T.alloc_shared((4, 5), "float32")
+        C_local = T.alloc_fragment((group_rows, 5), "float32")
+        T.copy(A_group, A_shared)
+        T.copy(B_group, B_shared)
+        T.clear(C_local)
+        T.gemm(A_shared, B_shared, C_local)
+        T.copy(C_local, C_group)
+
+    @T.prim_func
+    def tile_grouped_gemm(
+        A: T.Tensor((5, 4), "float32"),
+        B: T.Tensor((2, 4, 5), "float32"),
+        C: T.Tensor((5, 5), "float32"),
+    ):
+        with T.Kernel(1, threads=1):
+            grouped_gemm_step(A, B, C, 0, 0, 2)
+            grouped_gemm_step(A, B, C, 1, 2, 3)
+
+    source = _real_mlir_source_or_skip(_build_mlir_from_tilelang_prim(tile_grouped_gemm, "tile_grouped_gemm"))
+
+    assert "func.func @tile_grouped_gemm" in source
+    assert source.count("linalg.matmul") == 2
+    assert source.count("memref.subview") >= 6
+
+
 def test_riscv_codegen_lowers_tilelang_gemm_transpose_b():
     @T.prim_func
     def tile_matmul_transpose_b(
