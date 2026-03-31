@@ -254,7 +254,9 @@ Python DSL
   - `build_host_shared_library()`
   - `load_host_module()`
   - `run_host()`
+  - `tilelang.compile(..., target="riscv")`
   - 基于 `ctypes + NumPy` 的 flattened memref ABI host simulation
+  - 基于 `RiscvKernelAdapter` 的轻量 CPU torch-facing runtime
 - 当前默认 debug pipeline 为：
   - `canonicalize`
   - `cse`
@@ -286,6 +288,7 @@ Python DSL
   - `examples/riscv/example_reduce_sum.py`
   - `examples/riscv/example_matmul.py`
   - 上述 examples 的 `--run-host` 与 `--emit-asm/--emit-object`
+  - direct `tilelang.compile(..., target="riscv")` host execution
 - 仍然属于后续任务的部分主要是：
   - 更完整的 region / subview 组合与 rank-reduction 场景
   - 更直接的 reduction 识别，而不是只依赖 `LowerInitBlock + scf` fallback
@@ -293,6 +296,7 @@ Python DSL
   - transposed / batched / mixed-shape `tl.gemm`
   - qemu / spike / rv64 smoke runner
   - `--run-qemu` 背后的真实执行器
+  - `linalg_riscv` 的 cache serialization / reload
 
 
 ## 6. 切入点设计
@@ -770,6 +774,7 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
 - x86 host 验证已经不是手工探针，而是仓库内正式能力：
   - `tilelang/jit/adapter/riscv/wrapper.py`
   - `tilelang/jit/adapter/riscv/adapter.py`
+  - `tilelang/jit/kernel.py` 上的 `RiscvKernelAdapter` 选择逻辑
 - 示例入口已经补齐到：
   - `examples/riscv/common.py`
   - `examples/riscv/example_vector_add.py`

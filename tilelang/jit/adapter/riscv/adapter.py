@@ -176,3 +176,6 @@ class RiscvKernelAdapter(BaseKernelAdapter):
         if isinstance(self.device_kernel_source, str):
             return self.device_kernel_source
         return super().get_kernel_source(kernel_only=kernel_only)
+
+    def get_host_source(self) -> str:
+        return self.get_kernel_source(kernel_only=False)
