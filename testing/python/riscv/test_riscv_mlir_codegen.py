@@ -379,6 +379,33 @@ def reduce_sum(A: T.Buffer((4, 8), "float32"), B: T.Buffer((4,), "float32")):
     assert "arith.addf" in source
 
 
+def test_riscv_codegen_lowers_multi_axis_reduce_sum_init_block():
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_source(
+            """
+# from tvm.script import tir as T
+@T.prim_func
+def reduce_sum_2d(A: T.Buffer((2, 3, 4), "float32"), B: T.Buffer((2,), "float32")):
+    for i, j, k in T.grid(2, 3, 4):
+        with T.block("sum"):
+            vi = T.axis.spatial(2, i)
+            vj = T.axis.reduce(3, j)
+            vk = T.axis.reduce(4, k)
+            with T.init():
+                B[vi] = T.float32(0)
+            B[vi] = B[vi] + A[vi, vj, vk]
+""",
+            "reduce_sum_2d",
+        )
+    )
+
+    assert "func.func @reduce_sum_2d(%arg0: memref<2x3x4xf32>, %arg1: memref<2xf32>)" in source
+    assert "linalg.fill" in source
+    assert "linalg.reduce" in source
+    assert "arith.addf" in source
+    assert "scf.for" not in source
+
+
 def test_riscv_codegen_lowers_reduce_max_init_block():
     source = _real_mlir_source_or_skip(
         _build_mlir_from_source(

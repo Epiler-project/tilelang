@@ -238,6 +238,36 @@ def test_tilelang_compile_runs_riscv_host_adapter_with_reduce_max():
 
 
 @T.prim_func
+def reduce_sum_planes(
+    A: T.Tensor((2, 3, 4), "float32"),
+    B: T.Tensor((2,), "float32"),
+):
+    for i, j, k in T.grid(2, 3, 4):
+        with T.block("sum"):
+            vi = T.axis.spatial(2, i)
+            vj = T.axis.reduce(3, j)
+            vk = T.axis.reduce(4, k)
+            with T.init():
+                B[vi] = T.float32(0)
+            B[vi] = B[vi] + A[vi, vj, vk]
+
+
+def test_tilelang_compile_runs_riscv_host_adapter_with_multi_axis_reduce_sum():
+    kernel = tilelang.compile(reduce_sum_planes, out_idx=[1], target="riscv")
+
+    data = torch.linspace(-2.0, 5.0, steps=24, dtype=torch.float32).reshape(2, 3, 4)
+    out = kernel(data)
+
+    source = kernel.get_kernel_source()
+    kernel.close()
+
+    assert "func.func @reduce_sum_planes" in source
+    assert "linalg.reduce" in source
+    assert "arith.addf" in source
+    torch.testing.assert_close(out, data.sum(dim=(1, 2)))
+
+
+@T.prim_func
 def reduce_exp_sum_rows(
     A: T.Tensor((4, 8), "float32"),
     Bias: T.Tensor((4,), "float32"),

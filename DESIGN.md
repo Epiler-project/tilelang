@@ -112,6 +112,7 @@ TileLang DSL
   - `examples/riscv/example_vector_add.py`
   - `examples/riscv/example_copy.py`
   - `examples/riscv/example_reduce_sum.py`
+  - `examples/riscv/example_reduce_sum_2d.py`
   - `examples/riscv/example_reduce_max.py`
   - `examples/riscv/example_matmul.py`
 - Tier 1：portable completeness suite
@@ -317,7 +318,7 @@ Python DSL
     `linalg.matmul_transpose_b` for static 2D matmul, including double-transpose via
     temporary transpose materialization
   - `BufferLoad/BufferStore -> memref.load/store`
-  - simple single-axis full-shape sum/min/max reduction init block 可识别为
+  - simple full-shape sum/min/max reduction init block（可含多个 reduction 轴）可识别为
     `linalg.fill + linalg.reduce`
   - single-axis additive reduction expressions with identity inputs plus output-broadcast
     inputs 可识别为 `linalg.fill + linalg.generic`
@@ -380,6 +381,7 @@ Python DSL
   - `examples/riscv/example_vector_add.py`
   - `examples/riscv/example_copy.py`
   - `examples/riscv/example_reduce_sum.py`
+  - `examples/riscv/example_reduce_sum_2d.py`
   - `examples/riscv/example_reduce_max.py`
   - `examples/riscv/example_matmul.py`
   - `examples/riscv/example_batched_gemm.py`
@@ -412,9 +414,11 @@ Python DSL
     - explicit singleton-dim operands such as `(K, 1)` are preserved for `tl.gemm`, so
       GEMV-style kernels lower through `linalg.matmul` without collapsing the vector operand
       away
-  - structured single-axis sum/min/max reductions on the host path
-    - `T.max` / `T.min` update forms now share the same `linalg.reduce` lowering path as
-      `sum`
+  - structured full-shape sum/min/max reductions on the host path
+    - one or more reduction axes now lower through the same `linalg.fill + linalg.reduce` path
+    - `examples/riscv/example_reduce_sum_2d.py` is landed as a backend-neutral multi-axis
+      reduction example
+    - `T.max` / `T.min` update forms now share the same `linalg.reduce` lowering path as `sum`
     - row-wise max patterns such as the first reduction phase in `example_online_softmax.py`
       are now recognized as structured reductions
   - structured additive reduction expressions on the host path
@@ -455,7 +459,7 @@ Python DSL
     - direct `tilelang.compile(..., target="riscv")` dynamic same-rank and dynamic rank-reduced
       copy kernels are covered by MLIR and host-runtime tests
   - local regression status on this machine:
-    - `python -m pytest testing/python/riscv -q` passes with `89 passed, 1 skipped`
+    - `python -m pytest testing/python/riscv -q` passes with `93 passed, 1 skipped`
 - 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
 - 仍然属于后续任务的部分主要是：
   - 将 Tier 1 portable suite 固化成更稳定的长期验收矩阵与持续扩展入口
@@ -471,9 +475,9 @@ Python DSL
       static-1 rank-reduction，以及 same-dtype rank-reduced `tl.copy -> memref.copy`
     - 更一般的非紧凑切片、复杂 stride、更多 mixed-rank 组合仍未覆盖
   - 更广的 reduction 识别：
-    - 当前覆盖 single-axis、full-shape 的 sum/min/max，以及一类
+    - 当前覆盖 full-shape、一个或多个 reduction 轴的 sum/min/max，以及一类
       identity-load + output-broadcast-load 的 additive reduction expression
-    - 更一般的多 reduction 轴、部分写回、非 identity indexing 仍未覆盖
+    - 更一般的部分写回、非 identity indexing、更复杂 contraction-style reduction 仍未覆盖
   - 更广的 `linalg.generic`、`linalg.reduce` 覆盖面：
     - 当前 elementwise 已覆盖 identity-load 与 ordered-subsequence broadcast-load
       的规则表达式

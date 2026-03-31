@@ -112,6 +112,7 @@ The project is considered complete for MVP when all items below are true.
 - `examples/riscv/example_vector_add.py`
 - `examples/riscv/example_copy.py`
 - `examples/riscv/example_reduce_sum.py`
+- `examples/riscv/example_reduce_sum_2d.py`
 - `examples/riscv/example_reduce_max.py`
 - `examples/riscv/example_matmul.py`
 - `examples/riscv/example_batched_gemm.py`
@@ -326,6 +327,7 @@ Recommended commit slicing:
     - `examples/riscv/example_vector_add.py`
     - `examples/riscv/example_copy.py`
     - `examples/riscv/example_reduce_sum.py`
+    - `examples/riscv/example_reduce_sum_2d.py`
     - `examples/riscv/example_reduce_max.py`
     - `examples/riscv/example_matmul.py`
     - `examples/riscv/example_batched_gemm.py`
@@ -359,7 +361,7 @@ Recommended commit slicing:
     - compact row-major symbolic layouts
     - static-1 rank-reduced views
   - broader reduction recognition beyond:
-    - single-axis full-shape sum/min/max patterns
+    - full-shape sum/min/max patterns with non-trivial indexing or contraction-style access
     - additive expression reductions with identity + output-broadcast inputs
   - broader `linalg.generic` / `linalg.reduce` coverage beyond the current simple cases
   - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched slices
@@ -496,7 +498,7 @@ Cover the non-GEMM structured MVP kernels.
   - fallback to `linalg.generic`
   - final fallback to `scf.for`
   - current landed status:
-    - simple single-axis full-shape sum/min/max reductions now lower to
+    - simple full-shape sum/min/max reductions over one or more reduction axes now lower to
       `linalg.fill + linalg.reduce`
     - additive reduction expressions such as `row_sum += exp2(A[i, j] - row_max[i])`
       now lower to `linalg.fill + linalg.generic`
@@ -633,8 +635,9 @@ Run a curated set of backend-neutral examples end to end.
   - optional run
 - current status:
   - all four examples are landed
-  - additional reduction example landed:
+  - additional reduction examples landed:
     - `examples/riscv/example_reduce_max.py`
+    - `examples/riscv/example_reduce_sum_2d.py`
   - additional structured coverage example landed:
     - `examples/riscv/example_batched_gemm.py`
   - additional dynamic mixed-shape example landed:
@@ -656,6 +659,7 @@ Run a curated set of backend-neutral examples end to end.
     - host/artifact coverage for `example_topk.py`
     - host/artifact coverage for `example_convolution.py`
     - host/artifact coverage for `example_reduce_max.py`
+    - host/artifact coverage for `example_reduce_sum_2d.py`
     - host/artifact coverage for `example_batched_gemm.py`
     - host/artifact coverage for `example_dynamic_batched_gemm.py`
     - host/artifact coverage for `example_gemv.py`
@@ -672,8 +676,9 @@ Run a curated set of backend-neutral examples end to end.
     - `tilelang.compile(..., target="riscv")` dynamic grouped GEMM host execution
     - `tilelang.compile(..., target="riscv")` dynamic same-rank copy host execution
     - `tilelang.compile(..., target="riscv")` dynamic rank-reduced copy host execution
+    - `tilelang.compile(..., target="riscv")` multi-axis full-shape reduction host execution
     - full `testing/python/riscv` regression currently passes on this machine:
-      `89 passed, 1 skipped`
+      `93 passed, 1 skipped`
   - dynamic grouped GEMM lowering status:
     - runtime dynamic `group_count` plus `Offsets` / `Sizes` now lower as a single
       `scf.for`-driven grouped dispatch
@@ -687,7 +692,9 @@ Run a curated set of backend-neutral examples end to end.
     - same-dtype dynamic equal-extent `T.copy` now lowers through
       `memref.subview + memref.copy` instead of scalarized copy loops
   - structured reduction lowering status:
-    - single-axis full-shape `sum` / `min` / `max` now lower to `linalg.fill + linalg.reduce`
+    - full-shape `sum` / `min` / `max` over one or more reduction axes now lower to
+      `linalg.fill + linalg.reduce`
+    - plane-style reductions such as `example_reduce_sum_2d.py` are covered by the same path
     - row-wise max kernels such as the first reduction stage in `example_online_softmax.py`
       are covered by the same structured path
     - additive reduction expressions such as the second reduction stage in

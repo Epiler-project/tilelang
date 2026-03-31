@@ -10,7 +10,6 @@ M = 4
 N = 4
 K = 4
 
-
 @T.prim_func
 def tile_matmul(
     A: T.Tensor((M, K), "float32"),
@@ -26,7 +25,6 @@ def tile_matmul(
         T.copy(B, B_shared)
         T.gemm(A_shared, B_shared, C_local)
         T.copy(C_local, C)
-
 
 def main(argv: list[str] | None = None) -> int:
     args = finalize_args(make_parser("RISC-V TileLang matmul example").parse_args(argv))

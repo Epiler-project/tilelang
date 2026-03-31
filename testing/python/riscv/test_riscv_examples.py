@@ -17,6 +17,7 @@ EXAMPLES = (
     "example_vector_add.py",
     "example_copy.py",
     "example_reduce_sum.py",
+    "example_reduce_sum_2d.py",
     "example_reduce_max.py",
     "example_matmul.py",
     "example_gemv.py",

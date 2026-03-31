@@ -167,7 +167,7 @@ private:
     tir::Buffer output_buffer;
     PrimExpr init_value;
     PrimExpr reduction_expr;
-    size_t reduction_dim{0};
+    llvm::SmallVector<size_t, 4> reduction_dims;
     Kind kind{Kind::kAdd};
   };
 
@@ -758,13 +758,45 @@ private:
 
   bool IsZeroValue(const PrimExpr& expr) { return tir::is_zero(expr); }
 
-  bool IsVarEqualZero(const PrimExpr& expr, const tir::Var& var) {
+  bool CollectVarsEqualZero(const PrimExpr& expr,
+                            llvm::SmallVectorImpl<const tir::VarNode*>* vars) {
+    if (const auto* and_node = expr.as<tir::AndNode>()) {
+      return CollectVarsEqualZero(and_node->a, vars) && CollectVarsEqualZero(and_node->b, vars);
+    }
     const auto* eq = expr.as<tir::EQNode>();
     if (eq == nullptr) {
       return false;
     }
-    return (ExprMatchesVar(eq->a, var) && IsZeroValue(eq->b)) ||
-           (ExprMatchesVar(eq->b, var) && IsZeroValue(eq->a));
+    if (const auto* lhs = eq->a.as<tir::VarNode>(); lhs != nullptr && IsZeroValue(eq->b)) {
+      vars->push_back(lhs);
+      return true;
+    }
+    if (const auto* rhs = eq->b.as<tir::VarNode>(); rhs != nullptr && IsZeroValue(eq->a)) {
+      vars->push_back(rhs);
+      return true;
+    }
+    return false;
+  }
+
+  bool MatchesReductionInitCondition(const PrimExpr& expr,
+                                     llvm::ArrayRef<tir::Var> reduction_vars) {
+    llvm::SmallVector<const tir::VarNode*, 4> init_vars;
+    if (!CollectVarsEqualZero(expr, &init_vars) || init_vars.size() != reduction_vars.size()) {
+      return false;
+    }
+    for (const tir::Var& reduction_var : reduction_vars) {
+      bool matched = false;
+      for (const tir::VarNode* init_var : init_vars) {
+        if (init_var == reduction_var.get()) {
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        return false;
+      }
+    }
+    return true;
   }
 
   bool ExprUsesVar(const PrimExpr& expr, const tir::Var& var) const {
@@ -881,11 +913,21 @@ private:
     return pattern;
   }
 
-  StructuredIndexPattern ReductionOutputPattern(size_t rank, size_t reduction_dim) {
+  bool IsReductionDim(llvm::ArrayRef<size_t> reduction_dims, size_t dim) {
+    for (size_t reduction_dim : reduction_dims) {
+      if (reduction_dim == dim) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  StructuredIndexPattern ReductionOutputPattern(size_t rank,
+                                                llvm::ArrayRef<size_t> reduction_dims) {
     StructuredIndexPattern pattern;
-    pattern.dims.reserve(rank > 0 ? rank - 1 : 0);
+    pattern.dims.reserve(rank >= reduction_dims.size() ? rank - reduction_dims.size() : 0);
     for (size_t i = 0; i < rank; ++i) {
-      if (i == reduction_dim) {
+      if (IsReductionDim(reduction_dims, i)) {
         continue;
       }
       pattern.dims.push_back(static_cast<unsigned>(i));
@@ -1661,7 +1703,6 @@ private:
       return false;
     }
 
-    bool saw_reduction_dim = false;
     for (size_t i = 0; i < match->loops.size(); ++i) {
       const tir::IterVar& iter_var = match->block->iter_vars[i];
       const auto* iter_value_var = match->block_realize->iter_values[i].as<tir::VarNode>();
@@ -1670,18 +1711,14 @@ private:
       }
       match->block_vars.push_back(iter_var->var);
       if (iter_var->iter_type == tir::IterVarType::kCommReduce) {
-        if (saw_reduction_dim) {
-          return false;
-        }
-        saw_reduction_dim = true;
-        match->reduction_dim = i;
+        match->reduction_dims.push_back(i);
       } else if (iter_var->iter_type == tir::IterVarType::kDataPar) {
         match->output_vars.push_back(iter_var->var);
       } else {
         return false;
       }
     }
-    if (!saw_reduction_dim) {
+    if (match->reduction_dims.empty()) {
       return false;
     }
 
@@ -1696,8 +1733,12 @@ private:
       return false;
     }
 
-    const tir::Var& reduction_var = match->block_vars[match->reduction_dim];
-    if (!IsVarEqualZero(match->init_if->condition, reduction_var)) {
+    llvm::SmallVector<tir::Var, 4> reduction_vars;
+    reduction_vars.reserve(match->reduction_dims.size());
+    for (size_t reduction_dim : match->reduction_dims) {
+      reduction_vars.push_back(match->block_vars[reduction_dim]);
+    }
+    if (!MatchesReductionInitCondition(match->init_if->condition, reduction_vars)) {
       return false;
     }
 
@@ -1725,7 +1766,7 @@ private:
       return false;
     }
     for (size_t i = 0, out_i = 0; i < match->loops.size(); ++i) {
-      if (i == match->reduction_dim) {
+      if (IsReductionDim(match->reduction_dims, i)) {
         continue;
       }
       if (!analyzer_.CanProveEqual(match->output_buffer->shape[out_i], match->loops[i]->extent)) {
@@ -1775,7 +1816,7 @@ private:
     }
 
     size_t rank = match.loops.size();
-    StructuredIndexPattern output_pattern = ReductionOutputPattern(rank, match.reduction_dim);
+    StructuredIndexPattern output_pattern = ReductionOutputPattern(rank, match.reduction_dims);
     llvm::SmallVector<mlir::AffineMap, 4> indexing_maps;
     indexing_maps.reserve(input_values.size() + 1);
     for (const StructuredIndexPattern& pattern : input_patterns) {
@@ -1786,8 +1827,9 @@ private:
     llvm::SmallVector<mlir::utils::IteratorType, 4> iterator_types;
     iterator_types.reserve(rank);
     for (size_t i = 0; i < rank; ++i) {
-      iterator_types.push_back(i == match.reduction_dim ? mlir::utils::IteratorType::reduction
-                                                        : mlir::utils::IteratorType::parallel);
+      iterator_types.push_back(IsReductionDim(match.reduction_dims, i)
+                                   ? mlir::utils::IteratorType::reduction
+                                   : mlir::utils::IteratorType::parallel);
     }
 
     builder_.create<mlir::linalg::FillOp>(loc_, mlir::ValueRange{init_value},
@@ -1850,9 +1892,13 @@ private:
 
     builder_.create<mlir::linalg::FillOp>(loc_, mlir::ValueRange{init_value},
                                           mlir::ValueRange{output_value});
+    llvm::SmallVector<int64_t, 4> reduction_dims;
+    reduction_dims.reserve(match.reduction_dims.size());
+    for (size_t reduction_dim : match.reduction_dims) {
+      reduction_dims.push_back(static_cast<int64_t>(reduction_dim));
+    }
     builder_.create<mlir::linalg::ReduceOp>(
-        loc_, mlir::ValueRange{input_value}, mlir::ValueRange{output_value},
-        llvm::ArrayRef<int64_t>{static_cast<int64_t>(match.reduction_dim)},
+        loc_, mlir::ValueRange{input_value}, mlir::ValueRange{output_value}, reduction_dims,
         [&](mlir::OpBuilder& b, mlir::Location loc, mlir::ValueRange args) {
           ICHECK_EQ(args.size(), 2);
           mlir::Value in = args[0];
