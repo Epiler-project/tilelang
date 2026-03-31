@@ -366,9 +366,7 @@ Recommended commit slicing:
     - additive expression reductions with identity + output-broadcast inputs
   - broader `linalg.generic` / `linalg.reduce` coverage beyond the current simple cases
   - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched case
-  - fully dynamic grouped-gemm dispatch beyond the current split-tensor two-group form
-  - broader qemu/spike validation beyond the current smoke path
-  - validation environment for qemu/spike is currently absent on this machine (`qemu-riscv64`, `spike`, `pk` not found in `PATH`)
+  - fully dynamic grouped-gemm dispatch beyond the current fixed-3-group offsets/sizes form
   - local `pytest testing/python/riscv -q` also requires a built TileLang/TVM Python environment with `tvm_ffi` importable
 
 ## Phase 0: Freeze Scope And Scaffolding
@@ -715,31 +713,12 @@ Run a curated set of backend-neutral examples end to end.
 - each example has a reference NumPy or Torch correctness check
 - each example can emit RISC-V `.s` and `.o`
 
-## Phase 6: RVV Optimization
+## Phase 6: Deferred Scope
 
-### Goal
+These items are explicitly out of the current completion target.
 
-Improve performance after correctness is stable.
-
-### Tasks
-
-- preserve `vector` ops longer in the pipeline
-- prioritize these patterns:
-  - `vector.transfer_read`
-  - `vector.transfer_write`
-  - `vector.contract`
-  - `vector.fma`
-  - `vector.reduction`
-- add pass knobs for:
-  - vectorization on or off
-  - debug loops path or vector path
-  - target CPU and feature strings
-
-### Acceptance
-
-- the same kernels still pass correctness tests
-- generated asm shows RVV use on optimized path
-- at least one microbenchmark shows improvement over loop fallback
+- dedicated qemu/spike environment validation
+- RVV/vector optimization work
 
 ## 8. Implementation Details By File
 
@@ -957,8 +936,8 @@ Treat the original examples in three tiers:
       GEMV port
     - `examples/riscv/example_grouped_gemm.py` now validates compile-time fixed grouped GEMM as a
       backend-neutral Tier 2 port
-    - `examples/riscv/example_dynamic_grouped_gemm.py` now validates split-tensor-driven dynamic
-      grouped GEMM as a backend-neutral Tier 2 port
+    - `examples/riscv/example_dynamic_grouped_gemm.py` now validates runtime offsets/sizes-driven
+      dynamic grouped GEMM as a backend-neutral Tier 2 port
   - current status:
     - the Tier 1 portable completeness suite is covered in the current backend-neutral plan
   - `examples/elementwise/example_elementwise_add.py` and `examples/gemm/example_gemm.py`
@@ -1027,8 +1006,7 @@ Do not attempt all features at once. Follow this exact order.
 7. make matmul pass
 8. add LLVM/RISC-V artifact export
 9. run host simulation
-10. run qemu/spike smoke tests
-11. only then start RVV optimization
+10. expand portable example coverage and structured lowering support
 
 ## 13. Common Failure Modes
 

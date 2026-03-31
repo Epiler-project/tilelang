@@ -434,8 +434,8 @@ Python DSL
   - dynamic grouped GEMM coverage on the host path
     - `examples/riscv/example_dynamic_grouped_gemm.py` is landed as a backend-neutral Tier 2
       example
-    - a runtime `Splits` tensor drives two dynamic grouped slices, each lowering through its own
-      `linalg.matmul`
+    - runtime `Offsets` / `Sizes` tensors drive three grouped slices, each lowering through its
+      own `linalg.matmul`
     - direct `tilelang.compile(..., target="riscv")` dynamic grouped-gemm kernels are covered by
       MLIR, host-runtime, and example tests
   - local regression status on this machine:
@@ -462,10 +462,7 @@ Python DSL
       的规则表达式
     - 更一般的 mixed indexing / gather-scatter / predicated elementwise 仍未结构化
   - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched slice
-  - fully dynamic grouped-gemm dispatch beyond the current split-tensor two-group form
-  - 更广的 qemu / spike / rv64 smoke 覆盖
-  - RVV 优化路径与向量化收益验证
-  - 当前机器缺少 `qemu-riscv64` / `spike` / `pk`，因此真实 RISC-V runner 还缺运行环境验证
+  - fully dynamic grouped-gemm dispatch beyond the current fixed-3-group offsets/sizes form
 
 
 ## 6. 切入点设计
@@ -1122,13 +1119,7 @@ MVP 首先应该追求：
 
 - MLIR -> LLVM IR
 - LLVM IR -> RISC-V asm/object
-- qemu/spike 运行验证
-
-### 15.4 Level 3: 性能测试
-
-- RVV 打开/关闭对比
-- `linalg-to-loops` 与 `linalg-to-vector` 对比
-- 不同 tile size 对比
+- 本机 host adapter 正确执行
 
 
 ## 16. 推荐的 MVP 范围
@@ -1167,7 +1158,7 @@ MVP 首先应该追求：
 6. 打通 `linalg.generic`
 7. 打通 `tl.gemm -> linalg.matmul`
 8. 接 MLIR pipeline 到 LLVM/RISC-V
-9. 再考虑 `vector` 和 RVV 优化
+9. 扩展 portable example 与更广的 structured lowering 覆盖
 
 
 ## 18. 最终建议
@@ -1185,7 +1176,6 @@ MVP 首先应该追求：
 - `linalg` 负责结构化计算
 - `tensor/memref/bufferization` 负责数据边界
 - `scf` 负责控制流
-- `vector` 负责 RVV 优化
 - `llvm` 负责最后的 RISC-V 落地
 
 这是当前工程复杂度、实现可行性、后续可维护性三者之间最平衡的方案。
