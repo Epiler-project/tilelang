@@ -18,6 +18,7 @@ EXAMPLES = (
     "example_copy.py",
     "example_reduce_sum.py",
     "example_matmul.py",
+    "example_dynamic_shape.py",
     "example_rms_norm.py",
     "example_online_softmax.py",
     "example_topk.py",

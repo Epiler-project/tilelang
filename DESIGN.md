@@ -369,27 +369,32 @@ Python DSL
   - `examples/riscv/example_copy.py`
   - `examples/riscv/example_reduce_sum.py`
   - `examples/riscv/example_matmul.py`
+  - `examples/riscv/example_dynamic_shape.py`
   - `examples/riscv/example_rms_norm.py`
   - `examples/riscv/example_online_softmax.py`
   - `examples/riscv/example_topk.py`
   - `examples/riscv/example_convolution.py`
   - 上述 examples 的 `--run-host` 与 `--emit-asm/--emit-object`
   - direct `tilelang.compile(..., target="riscv")` host execution
+  - dynamic-shape buffer params:
+    - symbolic shape vars are rebound from `memref.dim`
+    - symbolic compact row-major strides such as `(k, 1)` / `(n, 1)` are accepted
 - 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
 - 仍然属于后续任务的部分主要是：
-  - 将 Tier 1 portable suite 逐步移植成 backend-neutral 的正式验收样例
+  - 将 Tier 1 portable suite 固化成更稳定的长期验收矩阵与持续扩展入口
   - 当前已落地的 Tier 1 portable ports:
+    - `example_dynamic_shape.py`
     - `example_rms_norm.py`
     - `example_online_softmax.py`
     - `example_topk.py`
     - `example_convolution.py`
-  - 下一批优先级为：
-    - `dynamic_shape`
+  - 按当前定义，Tier 1 portable completeness suite 已完成
   - 更完整的 region / subview 组合与 rank-reduction 场景
   - 更广的 reduction 识别，而不只覆盖简单 full-shape sum
   - 更广的 `linalg.generic`、`linalg.reduce` 覆盖面
   - batched / mixed-shape `tl.gemm`
   - 更广的 qemu / spike / rv64 smoke 覆盖
+  - RVV 优化路径与向量化收益验证
   - 当前机器缺少 `qemu-riscv64` / `spike` / `pk`，因此真实 RISC-V runner 还缺运行环境验证
 
 

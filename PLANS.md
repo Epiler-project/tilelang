@@ -597,6 +597,7 @@ Run a curated set of backend-neutral examples end to end.
 - current status:
   - all four examples are landed
   - Tier 1 portable ports landed:
+    - `examples/riscv/example_dynamic_shape.py`
     - `examples/riscv/example_rms_norm.py`
     - `examples/riscv/example_online_softmax.py`
     - `examples/riscv/example_topk.py`
@@ -608,10 +609,17 @@ Run a curated set of backend-neutral examples end to end.
   - current automated coverage includes:
     - freestanding ELF build validation on this machine
     - qemu smoke coverage when a simulator is available
+    - host/artifact coverage for `example_dynamic_shape.py`
     - host/artifact coverage for `example_rms_norm.py`
     - host/artifact coverage for `example_online_softmax.py`
     - host/artifact coverage for `example_topk.py`
     - host/artifact coverage for `example_convolution.py`
+    - `tilelang.compile(..., target="riscv")` dynamic-shape host execution
+    - full `testing/python/riscv` regression currently passes on this machine:
+      `53 passed, 1 skipped`
+  - dynamic-shape lowering status:
+    - buffer shape vars are rebound from function memrefs via `memref.dim`
+    - symbolic compact row-major strides remain accepted in the JIT path
   - broader completeness work should port the portable expansion set into backend-neutral
     `examples/riscv/` style entry points instead of trying to reuse the original GPU-oriented
     scripts unchanged
@@ -855,12 +863,13 @@ Treat the original examples in three tiers:
   - `examples/topk/example_topk.py`
   - `examples/convolution/example_convolution.py`
   - current landed portable ports:
+    - `examples/riscv/example_dynamic_shape.py`
     - `examples/riscv/example_rms_norm.py`
     - `examples/riscv/example_online_softmax.py`
     - `examples/riscv/example_topk.py`
     - `examples/riscv/example_convolution.py`
-  - next implementation order after the current landed ports:
-    - `examples/dynamic_shape/example_dynamic.py`
+  - current status:
+    - the Tier 1 portable completeness suite is covered in the current backend-neutral plan
   - `examples/elementwise/example_elementwise_add.py` and `examples/gemm/example_gemm.py`
     are already covered semantically by the current MVP demos, even though the original upstream
     scripts are still GPU-oriented

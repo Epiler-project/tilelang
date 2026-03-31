@@ -315,6 +315,40 @@ def copy_sub(A: T.Buffer((8,), "float32"), B: T.Buffer((4,), "float32")):
     assert "linalg.generic" in source or "memref.load %subview" in source
 
 
+def test_riscv_codegen_lowers_dynamic_shape_vars_from_memref_dims():
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_source(
+            """
+# from tvm.script import tir as T
+m = T.int32(is_size_var=True)
+n = T.int32(is_size_var=True)
+k = T.int32(is_size_var=True)
+@T.prim_func
+def dyn_matmul(
+    A: T.Buffer((m, k), "float32"),
+    B: T.Buffer((k, n), "float32"),
+    C: T.Buffer((m, n), "float32"),
+):
+    for i, j, kk in T.grid(m, n, k):
+        with T.block("matmul"):
+            vi = T.axis.spatial(m, i)
+            vj = T.axis.spatial(n, j)
+            vk = T.axis.reduce(k, kk)
+            with T.init():
+                C[vi, vj] = T.float32(0)
+            C[vi, vj] = C[vi, vj] + A[vi, vk] * B[vk, vj]
+""",
+            "dyn_matmul",
+        )
+    )
+
+    assert "func.func @dyn_matmul(%arg0: memref<?x?xf32>, %arg1: memref<?x?xf32>, %arg2: memref<?x?xf32>)" in source
+    assert source.count("memref.dim") >= 3
+    assert "scf.for" in source
+    assert "memref.load" in source
+    assert "memref.store" in source
+
+
 def test_riscv_codegen_lowers_reduce_sum_init_block():
     source = _real_mlir_source_or_skip(
         _build_mlir_from_source(

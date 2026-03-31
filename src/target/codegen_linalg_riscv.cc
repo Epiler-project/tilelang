@@ -738,7 +738,7 @@ private:
     TVM_FFI_UNREACHABLE();
   }
 
-  bool HasStaticCompactRowMajorLayout(const tir::Buffer& buffer) {
+  bool HasCompactRowMajorLayout(const tir::Buffer& buffer) {
     if (buffer->strides.empty()) {
       return true;
     }
@@ -746,14 +746,15 @@ private:
       return false;
     }
 
-    int64_t expected_stride = 1;
+    arith::Analyzer analyzer;
+    PrimExpr expected_stride =
+        buffer->shape.empty() ? PrimExpr(Integer(1))
+                              : tir::make_const(buffer->shape.back().dtype(), 1);
     for (int i = static_cast<int>(buffer->shape.size()) - 1; i >= 0; --i) {
-      const auto* stride_imm = buffer->strides[i].as<IntImmNode>();
-      const auto* shape_imm = buffer->shape[i].as<IntImmNode>();
-      if (stride_imm == nullptr || shape_imm == nullptr || stride_imm->value != expected_stride) {
+      if (!analyzer.CanProveEqual(buffer->strides[i], expected_stride)) {
         return false;
       }
-      expected_stride *= shape_imm->value;
+      expected_stride = analyzer.Simplify(expected_stride * buffer->shape[i]);
     }
     return true;
   }
@@ -761,7 +762,7 @@ private:
   void ValidateContiguousBuffer(const tir::Buffer& buffer) {
     ICHECK_EQ(buffer->dtype.lanes(), 1)
         << "Vector element buffers are not supported yet for linalg_riscv";
-    ICHECK(HasStaticCompactRowMajorLayout(buffer))
+    ICHECK(HasCompactRowMajorLayout(buffer))
         << "Only compact row-major buffers are supported in linalg_riscv: " << buffer->name;
     ICHECK(tir::is_zero(buffer->elem_offset))
         << "Non-zero elem_offset is not supported yet for linalg_riscv: " << buffer->name;
@@ -927,6 +928,18 @@ private:
     saved_bindings->emplace_back(buffer.get(), SaveAndSet(buffer_values_, buffer.get(), value));
     saved_bindings->emplace_back(buffer->data.get(),
                                  SaveAndSet(buffer_values_, buffer->data.get(), value));
+  }
+
+  void BindDynamicShapeVars(const tir::Buffer& buffer, mlir::Value value) {
+    for (size_t i = 0; i < buffer->shape.size(); ++i) {
+      const auto* dim_var = buffer->shape[i].as<tir::VarNode>();
+      if (dim_var == nullptr || scalar_values_.count(dim_var)) {
+        continue;
+      }
+      mlir::Value index = ConstantIntLike(static_cast<int64_t>(i), builder_.getIndexType());
+      mlir::Value dim = builder_.create<mlir::memref::DimOp>(loc_, value, index);
+      scalar_values_[dim_var] = dim;
+    }
   }
 
   mlir::Value CreateSubview(const tir::MatchBufferRegion& match_buffer) {
@@ -1539,6 +1552,7 @@ private:
           buffer_values_[param.get()] = arg;
           buffer_values_[buffer.get()] = arg;
           buffer_values_[buffer->data.get()] = arg;
+          BindDynamicShapeVars(buffer, arg);
         } else {
           scalar_values_[param.get()] = arg;
         }
