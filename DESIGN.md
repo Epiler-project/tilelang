@@ -257,6 +257,7 @@ Python DSL
   - `tilelang.compile(..., target="riscv")`
   - 基于 `ctypes + NumPy` 的 flattened memref ABI host simulation
   - 基于 `RiscvKernelAdapter` 的轻量 CPU torch-facing runtime
+  - `linalg_riscv` 的 cache serialization / reload
 - 当前默认 debug pipeline 为：
   - `canonicalize`
   - `cse`
@@ -296,7 +297,7 @@ Python DSL
   - transposed / batched / mixed-shape `tl.gemm`
   - qemu / spike / rv64 smoke runner
   - `--run-qemu` 背后的真实执行器
-  - `linalg_riscv` 的 cache serialization / reload
+  - 当前机器缺少 `qemu-riscv64` / `spike` / `pk`，因此真实 RISC-V runner 还缺运行环境验证
 
 
 ## 6. 切入点设计

@@ -313,6 +313,16 @@ def load_host_module(
     return HostKernelLibrary(out_path, signature, owned_tempdir=owned_tempdir)
 
 
+def load_host_module_from_binary(
+    mlir_source: str,
+    path: str | os.PathLike[str],
+    *,
+    function_name: str | None = None,
+) -> HostKernelLibrary:
+    signature = _select_signature(mlir_source, function_name)
+    return HostKernelLibrary(path, signature)
+
+
 def run_host(
     value: Any,
     *args: Any,
@@ -333,6 +343,7 @@ def run_host(
 __all__ = [
     "HostKernelLibrary",
     "build_host_shared_library",
+    "load_host_module_from_binary",
     "load_host_module",
     "resolve_host_triple",
     "run_host",

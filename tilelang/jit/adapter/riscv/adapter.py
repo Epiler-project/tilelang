@@ -11,7 +11,7 @@ from tilelang.engine.param import KernelParam
 from tilelang.jit.adapter.base import BaseKernelAdapter
 from tilelang.utils.target import determine_target
 
-from .wrapper import HostKernelLibrary, load_host_module
+from .wrapper import HostKernelLibrary, load_host_module, load_host_module_from_binary
 
 
 class RiscvKernelAdapter(BaseKernelAdapter):
@@ -48,6 +48,7 @@ class RiscvKernelAdapter(BaseKernelAdapter):
         self.pass_configs = pass_configs or {}
         self.compile_flags = compile_flags
         self._host_library: HostKernelLibrary | None = None
+        self.libpath: str | None = None
 
         if isinstance(func_or_mod, tir.PrimFunc):
             self.ir_module = tvm.IRModule({func_or_mod.attrs["global_symbol"]: func_or_mod})
@@ -55,6 +56,7 @@ class RiscvKernelAdapter(BaseKernelAdapter):
             self.ir_module = func_or_mod
 
         self.dynamic_symbolic_map = self._process_dynamic_symbolic()
+        self._materialize_host_library()
         self._post_init()
 
     @property
@@ -91,7 +93,11 @@ class RiscvKernelAdapter(BaseKernelAdapter):
             if source_value is None:
                 raise RuntimeError("No MLIR source module is available for host execution")
             self._host_library = load_host_module(source_value)
+            self.libpath = str(self._host_library.path)
         return self._host_library
+
+    def _materialize_host_library(self) -> None:
+        self._get_host_library()
 
     def close(self) -> None:
         if self._host_library is not None:
@@ -169,6 +175,44 @@ class RiscvKernelAdapter(BaseKernelAdapter):
             return [host_args[i] for i in self.result_idx]
 
         return func
+
+    @classmethod
+    def from_database(
+        cls,
+        params: list[KernelParam],
+        result_idx: list[int],
+        target: str,
+        func_or_mod: tir.PrimFunc | tvm.IRModule,
+        host_kernel_source: str,
+        device_kernel_source: str,
+        kernel_lib_path: str,
+        verbose: bool = False,
+        pass_configs: dict[str, Any] | None = None,
+        compile_flags: list[str] | None = None,
+    ):
+        adapter = cls.__new__(cls)
+        adapter.params = params
+        adapter.result_idx = adapter._legalize_result_idx(result_idx)
+        adapter.target = Target.canon_target(determine_target(target))
+        adapter.host_mod = None
+        adapter.device_mod = None
+        adapter.rt_mod = None
+        adapter.host_kernel_source = host_kernel_source
+        adapter.device_kernel_source = device_kernel_source
+        adapter.verbose = verbose
+        adapter.pass_configs = pass_configs or {}
+        adapter.compile_flags = compile_flags
+        adapter.libpath = kernel_lib_path
+        adapter._host_library = load_host_module_from_binary(device_kernel_source, kernel_lib_path)
+
+        if isinstance(func_or_mod, tir.PrimFunc):
+            adapter.ir_module = tvm.IRModule({func_or_mod.attrs["global_symbol"]: func_or_mod})
+        else:
+            adapter.ir_module = func_or_mod
+
+        adapter.dynamic_symbolic_map = adapter._process_dynamic_symbolic()
+        adapter._post_init()
+        return adapter
 
     def get_kernel_source(self, kernel_only: bool = True) -> str:
         if self.rt_mod is not None and hasattr(self.rt_mod, "inspect_source"):

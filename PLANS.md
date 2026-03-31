@@ -310,16 +310,17 @@ Recommended commit slicing:
     - each example emits non-empty RISC-V `.s` and `.o` artifacts
 - Phase 4 lightweight JIT runtime integration is partially landed:
   - `tilelang.compile(..., target="riscv")` now routes to `RiscvKernelAdapter`
-  - the current `linalg_riscv` path bypasses disk cache until MLIR/runtime serialization is implemented
+  - `linalg_riscv` disk cache serialization / reload is now wired through the host `.so`
   - automated coverage currently includes:
     - direct JIT compile + local CPU execution
+    - disk-cache reload without recompilation
 - next gap has shifted to Phase 2+:
   - broader region / subview / slice lowering beyond the simple contiguous case
   - native reduction recognition beyond `LowerInitBlock + scf` fallback
   - `linalg.generic` / `linalg.reduce`
   - transposed / batched / mixed-shape `tl.gemm`
   - real qemu/spike runner wiring behind `--run-qemu`
-  - cache serialization / reload for `linalg_riscv`
+  - validation environment for qemu/spike is currently absent on this machine (`qemu-riscv64`, `spike`, `pk` not found in `PATH`)
 
 ## Phase 0: Freeze Scope And Scaffolding
 
@@ -716,6 +717,8 @@ Create a new directory `testing/python/riscv`.
   - the example CLIs emit RISC-V asm/object artifacts
 - `test_riscv_jit_runtime.py`
   - `tilelang.compile(..., target="riscv")` runs through the host adapter
+- `test_riscv_cache.py`
+  - `linalg_riscv` disk cache reloads from cache without recompilation
 
 ### Level 3: optional runtime
 

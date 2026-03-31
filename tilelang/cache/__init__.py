@@ -57,21 +57,6 @@ def cached(
     norm_target = Target(_determine_target(target)) if isinstance(target, str) else target
     requested_backend = execution_backend
     execution_backend = resolve_execution_backend(requested_backend, norm_target)
-    if norm_target.kind.name == "linalg_riscv":
-        if verbose:
-            logger = logging.getLogger(__name__)
-            logger.setLevel(logging.INFO)
-            logger.info("Bypassing kernel cache for linalg_riscv until cache serialization is implemented.")
-        return JITKernel(
-            func,
-            out_idx=out_idx,
-            execution_backend=execution_backend,
-            target=norm_target,
-            target_host=target_host,
-            verbose=verbose,
-            pass_configs=pass_configs,
-            compile_flags=compile_flags,
-        )
     if verbose:
         allowed_now = allowed_backends_for_target(norm_target, include_unavailable=False)
         # Avoid duplicate logs when caller already resolved explicitly

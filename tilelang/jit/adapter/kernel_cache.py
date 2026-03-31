@@ -15,7 +15,16 @@ class TVMFFIKernelCache(KernelCache):
 
     def _save_so_cubin_to_disk(self, kernel: JITKernel, cache_path: str, verbose: bool = False):
         kernel_lib_path = os.path.join(cache_path, self.kernel_lib_path)
-        executable = kernel.adapter.executable
+        if hasattr(kernel.adapter, "executable") and kernel.adapter.executable is not None:
+            executable = kernel.adapter.executable
+            if verbose:
+                self.logger.debug(f"Saving kernel executable to file: {executable}")
+            KernelCache._safe_write_executable(executable, kernel_lib_path)
+            return
+
+        src_lib_path = getattr(kernel.adapter, "libpath", None)
+        if src_lib_path is None:
+            raise AttributeError("Kernel adapter does not expose either `executable` or `libpath` for cache persistence")
         if verbose:
-            self.logger.debug(f"Saving kernel executable to file: {executable}")
-        KernelCache._safe_write_executable(executable, kernel_lib_path)
+            self.logger.debug(f"Saving kernel shared library to file: {kernel_lib_path}")
+        KernelCache._safe_write_file(kernel_lib_path, "wb", lambda file: file.write(KernelCache._load_binary(src_lib_path)))
