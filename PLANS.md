@@ -322,8 +322,8 @@ Recommended commit slicing:
     - disk-cache reload without recompilation
 - next gap has shifted to Phase 2+:
   - broader region / subview / slice lowering beyond the simple contiguous case
-  - native reduction recognition beyond `LowerInitBlock + scf` fallback
-  - `linalg.generic` / `linalg.reduce`
+  - broader reduction recognition beyond the simple full-shape sum pattern
+  - broader `linalg.generic` / `linalg.reduce` coverage beyond the current simple cases
   - batched / mixed-shape `tl.gemm`
   - real qemu/spike runner wiring behind `--run-qemu`
   - validation environment for qemu/spike is currently absent on this machine (`qemu-riscv64`, `spike`, `pk` not found in `PATH`)
@@ -455,6 +455,9 @@ Cover the non-GEMM structured MVP kernels.
   - prefer `linalg.reduce`
   - fallback to `linalg.generic`
   - final fallback to `scf.for`
+  - current landed status:
+    - simple full-shape sum reductions now lower to `linalg.fill + linalg.reduce`
+    - more complex reduction shapes still stay on the fallback path
 - add explicit unsupported-op diagnostics:
   - node type
   - op name

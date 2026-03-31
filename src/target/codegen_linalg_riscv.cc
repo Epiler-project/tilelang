@@ -106,6 +106,20 @@ private:
     std::vector<tir::Buffer> input_buffers;
   };
 
+  struct ReductionLoopNestMatch {
+    llvm::SmallVector<const tir::ForNode*, 4> loops;
+    const tir::BlockRealizeNode* block_realize{nullptr};
+    const tir::BlockNode* block{nullptr};
+    const tir::IfThenElseNode* init_if{nullptr};
+    const tir::BufferStoreNode* update_store{nullptr};
+    llvm::SmallVector<tir::Var, 4> block_vars;
+    llvm::SmallVector<tir::Var, 4> output_vars;
+    tir::Buffer input_buffer;
+    tir::Buffer output_buffer;
+    PrimExpr init_value;
+    size_t reduction_dim{0};
+  };
+
   class ElementwiseExprAnalyzer final : private tir::ExprFunctor<bool(const PrimExpr&)> {
   public:
     explicit ElementwiseExprAnalyzer(llvm::ArrayRef<tir::Var> block_vars)
@@ -641,6 +655,29 @@ private:
       }
     }
     return true;
+  }
+
+  bool ExprMatchesVar(const PrimExpr& expr, const tir::Var& var) {
+    const auto* expr_var = expr.as<tir::VarNode>();
+    return expr_var != nullptr && expr_var == var.get();
+  }
+
+  bool IsZeroValue(const PrimExpr& expr) { return tir::is_zero(expr); }
+
+  bool IsVarEqualZero(const PrimExpr& expr, const tir::Var& var) {
+    const auto* eq = expr.as<tir::EQNode>();
+    if (eq == nullptr) {
+      return false;
+    }
+    return (ExprMatchesVar(eq->a, var) && IsZeroValue(eq->b)) ||
+           (ExprMatchesVar(eq->b, var) && IsZeroValue(eq->a));
+  }
+
+  bool MatchesBufferLoad(const PrimExpr& expr, const tir::Buffer& buffer,
+                         llvm::ArrayRef<tir::Var> vars) {
+    const auto* load = expr.as<tir::BufferLoadNode>();
+    return load != nullptr && load->buffer.get() == buffer.get() &&
+           IndicesMatchIdentityVars(load->indices, vars);
   }
 
   int64_t GetStaticInt(const PrimExpr& expr, const char* what) {
@@ -1201,6 +1238,162 @@ private:
     return true;
   }
 
+  bool MatchReductionLoopNest(const tir::ForNode* outer, ReductionLoopNestMatch* match) {
+    const tir::ForNode* current = outer;
+    while (true) {
+      if (!(current->kind == tir::ForKind::kSerial || current->kind == tir::ForKind::kUnrolled) ||
+          current->thread_binding.defined() || !tir::is_zero(current->min) ||
+          (current->step.defined() && !tir::is_one(current->step.value()))) {
+        return false;
+      }
+      match->loops.push_back(current);
+
+      if (const auto* inner = current->body.as<tir::ForNode>()) {
+        current = inner;
+        continue;
+      }
+      match->block_realize = current->body.as<tir::BlockRealizeNode>();
+      if (match->block_realize == nullptr || !tir::is_one(match->block_realize->predicate)) {
+        return false;
+      }
+      break;
+    }
+
+    match->block = match->block_realize->block.get();
+    if (match->block->init.defined() || !match->block->alloc_buffers.empty() ||
+        !match->block->match_buffers.empty() ||
+        match->block->iter_vars.size() != match->loops.size() ||
+        match->block_realize->iter_values.size() != match->loops.size()) {
+      return false;
+    }
+
+    bool saw_reduction_dim = false;
+    for (size_t i = 0; i < match->loops.size(); ++i) {
+      const tir::IterVar& iter_var = match->block->iter_vars[i];
+      const auto* iter_value_var = match->block_realize->iter_values[i].as<tir::VarNode>();
+      if (iter_value_var == nullptr || iter_value_var != match->loops[i]->loop_var.get()) {
+        return false;
+      }
+      match->block_vars.push_back(iter_var->var);
+      if (iter_var->iter_type == tir::IterVarType::kCommReduce) {
+        if (saw_reduction_dim) {
+          return false;
+        }
+        saw_reduction_dim = true;
+        match->reduction_dim = i;
+      } else if (iter_var->iter_type == tir::IterVarType::kDataPar) {
+        match->output_vars.push_back(iter_var->var);
+      } else {
+        return false;
+      }
+    }
+    if (!saw_reduction_dim) {
+      return false;
+    }
+
+    const auto* seq = match->block->body.as<tir::SeqStmtNode>();
+    if (seq == nullptr || seq->seq.size() != 2) {
+      return false;
+    }
+    match->init_if = seq->seq[0].as<tir::IfThenElseNode>();
+    match->update_store = seq->seq[1].as<tir::BufferStoreNode>();
+    if (match->init_if == nullptr || match->init_if->else_case.defined() ||
+        match->update_store == nullptr || match->update_store->predicate.defined()) {
+      return false;
+    }
+
+    const tir::Var& reduction_var = match->block_vars[match->reduction_dim];
+    if (!IsVarEqualZero(match->init_if->condition, reduction_var)) {
+      return false;
+    }
+
+    const auto* init_store = match->init_if->then_case.as<tir::BufferStoreNode>();
+    if (init_store == nullptr || init_store->predicate.defined() ||
+        !IndicesMatchIdentityVars(init_store->indices, match->output_vars) ||
+        !IndicesMatchIdentityVars(match->update_store->indices, match->output_vars)) {
+      return false;
+    }
+
+    match->output_buffer = match->update_store->buffer;
+    if (init_store->buffer.get() != match->output_buffer.get()) {
+      return false;
+    }
+    match->init_value = init_store->value;
+
+    const auto* add = match->update_store->value.as<tir::AddNode>();
+    if (add == nullptr) {
+      return false;
+    }
+
+    const PrimExpr* input_expr = nullptr;
+    if (MatchesBufferLoad(add->a, match->output_buffer, match->output_vars)) {
+      input_expr = &add->b;
+    } else if (MatchesBufferLoad(add->b, match->output_buffer, match->output_vars)) {
+      input_expr = &add->a;
+    } else {
+      return false;
+    }
+
+    const auto* input_load = input_expr->as<tir::BufferLoadNode>();
+    if (input_load == nullptr || !IndicesMatchIdentityVars(input_load->indices, match->block_vars)) {
+      return false;
+    }
+    match->input_buffer = input_load->buffer;
+
+    ValidateContiguousBuffer(match->input_buffer);
+    ValidateContiguousBuffer(match->output_buffer);
+    if (match->input_buffer->shape.size() != match->loops.size() ||
+        match->output_buffer->shape.size() != match->output_vars.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < match->loops.size(); ++i) {
+      if (!analyzer_.CanProveEqual(match->input_buffer->shape[i], match->loops[i]->extent)) {
+        return false;
+      }
+    }
+    for (size_t i = 0, out_i = 0; i < match->loops.size(); ++i) {
+      if (i == match->reduction_dim) {
+        continue;
+      }
+      if (!analyzer_.CanProveEqual(match->output_buffer->shape[out_i], match->loops[i]->extent)) {
+        return false;
+      }
+      ++out_i;
+    }
+    return true;
+  }
+
+  bool TryLowerReductionLoopNest(const tir::ForNode* outer) {
+    ReductionLoopNestMatch match;
+    if (!MatchReductionLoopNest(outer, &match)) {
+      return false;
+    }
+
+    mlir::Value init_value = VisitExpr(match.init_value);
+    init_value = CastValue(init_value, match.init_value.dtype(), match.output_buffer->dtype);
+    mlir::Value output_value = LookupBufferValue(match.output_buffer);
+    mlir::Value input_value = LookupBufferValue(match.input_buffer);
+
+    builder_.create<mlir::linalg::FillOp>(loc_, mlir::ValueRange{init_value},
+                                          mlir::ValueRange{output_value});
+    builder_.create<mlir::linalg::ReduceOp>(
+        loc_, mlir::ValueRange{input_value}, mlir::ValueRange{output_value},
+        llvm::ArrayRef<int64_t>{static_cast<int64_t>(match.reduction_dim)},
+        [&](mlir::OpBuilder& b, mlir::Location loc, mlir::ValueRange args) {
+          ICHECK_EQ(args.size(), 2);
+          mlir::Value in = args[0];
+          mlir::Value acc = args[1];
+          mlir::Value reduced;
+          if (match.output_buffer->dtype.is_float()) {
+            reduced = b.create<mlir::arith::AddFOp>(loc, acc, in);
+          } else {
+            reduced = b.create<mlir::arith::AddIOp>(loc, acc, in);
+          }
+          b.create<mlir::linalg::YieldOp>(loc, reduced);
+        });
+    return true;
+  }
+
   bool TryLowerElementwiseLoopNest(const tir::ForNode* outer) {
     ElementwiseLoopNestMatch match;
     if (!MatchElementwiseLoopNest(outer, &match)) {
@@ -1333,6 +1526,9 @@ private:
   }
 
   void VisitStmt_(const tir::ForNode* op) final {
+    if (TryLowerReductionLoopNest(op)) {
+      return;
+    }
     if (TryLowerElementwiseLoopNest(op)) {
       return;
     }

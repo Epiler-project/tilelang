@@ -246,7 +246,8 @@ Python DSL
     `linalg.matmul_transpose_b` for static 2D matmul, including double-transpose via
     temporary transpose materialization
   - `BufferLoad/BufferStore -> memref.load/store`
-  - simple reduction init block 通过 `LowerInitBlock` 降成 `scf.if` fallback
+  - simple reduction init block 可识别为 `linalg.fill + linalg.reduce`
+  - 未匹配的 reduction 仍然保留 `LowerInitBlock + scf` fallback
   - 常量、`Cast`、`Add/Sub/Mul/Div`、比较、`Select`
 - 当前已经打通的 artifact/export + host 验证子集包括：
   - `emit_mlir()`
@@ -280,7 +281,7 @@ Python DSL
   - if-guarded store
   - local `alloc_buffer` staging
   - contiguous subview / `match_buffer`
-  - reduce-sum fallback
+  - structured reduce-sum (`linalg.fill + linalg.reduce`)
   - TileLang `T.copy` kernel shell
   - TileLang `T.clear` / fill kernel shell
   - TileLang `T.gemm -> linalg.matmul` kernel shell
@@ -297,8 +298,8 @@ Python DSL
   - direct `tilelang.compile(..., target="riscv")` host execution
 - 仍然属于后续任务的部分主要是：
   - 更完整的 region / subview 组合与 rank-reduction 场景
-  - 更直接的 reduction 识别，而不是只依赖 `LowerInitBlock + scf` fallback
-  - `linalg.generic`、`linalg.reduce`
+  - 更广的 reduction 识别，而不只覆盖简单 full-shape sum
+  - 更广的 `linalg.generic`、`linalg.reduce` 覆盖面
   - batched / mixed-shape `tl.gemm`
   - qemu / spike / rv64 smoke runner
   - `--run-qemu` 背后的真实执行器
@@ -551,6 +552,12 @@ MVP 范围内建议只支持：
 - 优先 `linalg.reduce`
 - 若模式过于复杂，fallback 到 `linalg.generic`
 - 再不行，用 `scf.for`
+
+当前已落地的 memref MVP 路径：
+
+- 对单 reduction 轴、完整覆盖 output shape、显式 init 可归约成 `if red_var == 0` 的 sum reduction
+- 直接发射 `linalg.fill + linalg.reduce`
+- 更复杂的 reduction 继续保留 `scf` fallback
 
 ### 8.9 不可结构化情况的处理
 

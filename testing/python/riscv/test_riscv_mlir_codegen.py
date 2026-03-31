@@ -293,9 +293,8 @@ def reduce_sum(A: T.Buffer((4, 8), "float32"), B: T.Buffer((4,), "float32")):
         )
     )
 
-    assert source.count("scf.for") == 2
-    assert "arith.cmpi eq" in source
-    assert "arith.constant 0.000000e+00 : f32" in source
+    assert "linalg.fill" in source
+    assert "linalg.reduce" in source
     assert "arith.addf" in source
 
 
