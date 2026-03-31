@@ -69,9 +69,10 @@ def copy(A: T.Buffer((4,), "float32"), B: T.Buffer((4,), "float32")):
     )
 
     assert "func.func @copy(%arg0: memref<4xf32>, %arg1: memref<4xf32>)" in source
-    assert "scf.for" in source
-    assert "memref.load" in source
-    assert "memref.store" in source
+    assert "linalg.generic" in source or "scf.for" in source
+    if "linalg.generic" not in source:
+        assert "memref.load" in source
+        assert "memref.store" in source
 
 
 def test_riscv_codegen_lowers_elementwise_add():
@@ -91,8 +92,8 @@ def add(A: T.Buffer((4,), "float32"), B: T.Buffer((4,), "float32"), C: T.Buffer(
     )
 
     assert "func.func @add(%arg0: memref<4xf32>, %arg1: memref<4xf32>, %arg2: memref<4xf32>)" in source
+    assert "linalg.generic" in source
     assert "arith.addf" in source
-    assert source.count("memref.load") >= 2
 
 
 def test_riscv_codegen_lowers_float_max():
@@ -245,7 +246,7 @@ def staged_copy(A: T.Buffer((4,), "float32"), B: T.Buffer((4,), "float32")):
     )
 
     assert "memref.alloca() : memref<4xf32>" in source
-    assert source.count("scf.for") == 2
+    assert source.count("linalg.generic") == 2 or source.count("scf.for") == 2
 
 
 def test_riscv_codegen_lowers_match_buffer_to_subview():
@@ -270,7 +271,7 @@ def copy_sub(A: T.Buffer((8,), "float32"), B: T.Buffer((4,), "float32")):
 
     assert "memref.subview" in source
     assert "to memref<4xf32, strided<[1], offset: 2>>" in source
-    assert "memref.load %subview" in source
+    assert "linalg.generic" in source or "memref.load %subview" in source
 
 
 def test_riscv_codegen_lowers_reduce_sum_init_block():

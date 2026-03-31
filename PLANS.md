@@ -448,6 +448,9 @@ Cover the non-GEMM structured MVP kernels.
 - implement elementwise recognition:
   - prefer `linalg.generic`
   - fallback to `scf.for + arith + memref`
+  - current landed status:
+    - pure `kDataPar`, identity-index, full-shape elementwise loop nests already lower to `linalg.generic`
+    - irregular slices / broadcast / predicates still stay on the `scf + memref` fallback
 - implement reduction recognition:
   - prefer `linalg.reduce`
   - fallback to `linalg.generic`

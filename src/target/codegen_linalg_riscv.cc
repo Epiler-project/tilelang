@@ -1,5 +1,6 @@
 #include "codegen_linalg_riscv.h"
 
+#include <algorithm>
 #include <functional>
 #include <optional>
 #include <sstream>
@@ -22,6 +23,7 @@
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/BuiltinTypes.h>
+#include <mlir/IR/AffineMap.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/IR/MLIRContext.h>
@@ -93,6 +95,402 @@ private:
   struct SavedBinding {
     bool had_value{false};
     mlir::Value value;
+  };
+
+  struct ElementwiseLoopNestMatch {
+    llvm::SmallVector<const tir::ForNode*, 4> loops;
+    const tir::BlockRealizeNode* block_realize{nullptr};
+    const tir::BlockNode* block{nullptr};
+    const tir::BufferStoreNode* store{nullptr};
+    llvm::SmallVector<tir::Var, 4> block_vars;
+    std::vector<tir::Buffer> input_buffers;
+  };
+
+  class ElementwiseExprAnalyzer final : private tir::ExprFunctor<bool(const PrimExpr&)> {
+  public:
+    explicit ElementwiseExprAnalyzer(llvm::ArrayRef<tir::Var> block_vars)
+        : block_vars_(block_vars.begin(), block_vars.end()) {}
+
+    bool Analyze(const PrimExpr& expr) { return VisitExpr(expr); }
+
+    const std::vector<tir::Buffer>& input_buffers() const { return input_buffers_; }
+
+  private:
+    using tir::ExprFunctor<bool(const PrimExpr&)>::VisitExpr;
+
+    bool IndicesMatch(const Array<PrimExpr>& indices) const {
+      if (indices.size() != block_vars_.size()) {
+        return false;
+      }
+      for (size_t i = 0; i < indices.size(); ++i) {
+        const auto* var = indices[i].as<tir::VarNode>();
+        if (var == nullptr || var != block_vars_[i].get()) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    template <typename T>
+    bool VisitBinary(const T* op) {
+      return VisitExpr(op->a) && VisitExpr(op->b);
+    }
+
+    bool VisitExpr_(const tir::VarNode* op) final {
+      for (const tir::Var& block_var : block_vars_) {
+        if (block_var.get() == op) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    bool VisitExpr_(const tir::BufferLoadNode* op) final {
+      if (!IndicesMatch(op->indices)) {
+        return false;
+      }
+      if (std::find_if(input_buffers_.begin(), input_buffers_.end(),
+                       [&](const tir::Buffer& buffer) { return buffer.get() == op->buffer.get(); }) ==
+          input_buffers_.end()) {
+        input_buffers_.push_back(op->buffer);
+      }
+      return true;
+    }
+
+    bool VisitExpr_(const tir::AddNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::SubNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::MulNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::DivNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::ModNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::FloorDivNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::FloorModNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::MinNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::MaxNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::EQNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::NENode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::LTNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::LENode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::GTNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::GENode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::AndNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::OrNode* op) final { return VisitBinary(op); }
+    bool VisitExpr_(const tir::NotNode* op) final { return VisitExpr(op->a); }
+
+    bool VisitExpr_(const tir::SelectNode* op) final {
+      return VisitExpr(op->condition) && VisitExpr(op->true_value) && VisitExpr(op->false_value);
+    }
+
+    bool VisitExpr_(const tir::CastNode* op) final { return VisitExpr(op->value); }
+    bool VisitExpr_(const IntImmNode* op) final {
+      (void)op;
+      return true;
+    }
+    bool VisitExpr_(const FloatImmNode* op) final {
+      (void)op;
+      return true;
+    }
+    bool VisitExpr_(const tir::CallNode* op) final {
+      (void)op;
+      return false;
+    }
+    bool VisitExprDefault_(const Object* op) final {
+      (void)op;
+      return false;
+    }
+
+    std::vector<tir::Var> block_vars_;
+    std::vector<tir::Buffer> input_buffers_;
+  };
+
+  class ElementwiseRegionExprLowerer final
+      : private tir::ExprFunctor<mlir::Value(const PrimExpr&)> {
+  public:
+    ElementwiseRegionExprLowerer(TIRToMLIRLowerer* outer, llvm::ArrayRef<tir::Var> block_vars,
+                                 llvm::ArrayRef<tir::Buffer> input_buffers,
+                                 llvm::ArrayRef<mlir::Value> input_values)
+        : outer_(outer), block_vars_(block_vars.begin(), block_vars.end()) {
+      ICHECK_EQ(input_buffers.size(), input_values.size());
+      for (size_t i = 0; i < input_buffers.size(); ++i) {
+        input_values_[input_buffers[i].get()] = input_values[i];
+      }
+    }
+
+    mlir::Value Lower(const PrimExpr& expr) { return VisitExpr(expr); }
+
+  private:
+    using tir::ExprFunctor<mlir::Value(const PrimExpr&)>::VisitExpr;
+
+    bool IndicesMatch(const Array<PrimExpr>& indices) const {
+      if (indices.size() != block_vars_.size()) {
+        return false;
+      }
+      for (size_t i = 0; i < indices.size(); ++i) {
+        const auto* var = indices[i].as<tir::VarNode>();
+        if (var == nullptr || var != block_vars_[i].get()) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    mlir::Value VisitExpr_(const tir::VarNode* op) final {
+      for (const tir::Var& block_var : block_vars_) {
+        ICHECK(block_var.get() != op)
+            << "Direct loop-index use is not supported in linalg.generic elementwise lowering";
+      }
+      return outer_->LookupVarValue(tvm::ffi::GetRef<tir::Var>(op));
+    }
+
+    mlir::Value VisitExpr_(const tir::BufferLoadNode* op) final {
+      ICHECK(IndicesMatch(op->indices))
+          << "Only identity elementwise buffer loads are supported in linalg.generic lowering";
+      auto it = input_values_.find(op->buffer.get());
+      ICHECK(it != input_values_.end())
+          << "Unbound elementwise input buffer in linalg.generic lowering: " << op->buffer->name;
+      return outer_->CastValue(it->second, op->buffer->dtype, op->dtype);
+    }
+
+    mlir::Value VisitExpr_(const tir::AddNode* op) final {
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), op->dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), op->dtype);
+      if (op->dtype.is_float()) {
+        return outer_->builder_.create<mlir::arith::AddFOp>(outer_->loc_, lhs, rhs);
+      }
+      return outer_->builder_.create<mlir::arith::AddIOp>(outer_->loc_, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::SubNode* op) final {
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), op->dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), op->dtype);
+      if (op->dtype.is_float()) {
+        return outer_->builder_.create<mlir::arith::SubFOp>(outer_->loc_, lhs, rhs);
+      }
+      return outer_->builder_.create<mlir::arith::SubIOp>(outer_->loc_, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::MulNode* op) final {
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), op->dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), op->dtype);
+      if (op->dtype.is_float()) {
+        return outer_->builder_.create<mlir::arith::MulFOp>(outer_->loc_, lhs, rhs);
+      }
+      return outer_->builder_.create<mlir::arith::MulIOp>(outer_->loc_, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::DivNode* op) final {
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), op->dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), op->dtype);
+      if (op->dtype.is_float()) {
+        return outer_->builder_.create<mlir::arith::DivFOp>(outer_->loc_, lhs, rhs);
+      }
+      if (op->dtype.is_uint() || op->dtype.is_bool()) {
+        return outer_->builder_.create<mlir::arith::DivUIOp>(outer_->loc_, lhs, rhs);
+      }
+      return outer_->builder_.create<mlir::arith::DivSIOp>(outer_->loc_, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::ModNode* op) final {
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), op->dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), op->dtype);
+      if (op->dtype.is_float()) {
+        return outer_->builder_.create<mlir::arith::RemFOp>(outer_->loc_, lhs, rhs);
+      }
+      if (op->dtype.is_uint() || op->dtype.is_bool()) {
+        return outer_->builder_.create<mlir::arith::RemUIOp>(outer_->loc_, lhs, rhs);
+      }
+      return outer_->builder_.create<mlir::arith::RemSIOp>(outer_->loc_, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::FloorDivNode* op) final {
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), op->dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), op->dtype);
+      ICHECK(!op->dtype.is_float()) << "tir.FloorDiv on floating-point dtype is not supported yet";
+      if (op->dtype.is_uint() || op->dtype.is_bool()) {
+        return outer_->builder_.create<mlir::arith::DivUIOp>(outer_->loc_, lhs, rhs);
+      }
+      return outer_->builder_.create<mlir::arith::FloorDivSIOp>(outer_->loc_, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::FloorModNode* op) final {
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), op->dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), op->dtype);
+      ICHECK(!op->dtype.is_float()) << "tir.FloorMod on floating-point dtype is not supported yet";
+      if (op->dtype.is_uint() || op->dtype.is_bool()) {
+        return outer_->builder_.create<mlir::arith::RemUIOp>(outer_->loc_, lhs, rhs);
+      }
+      mlir::Value quotient = outer_->builder_.create<mlir::arith::FloorDivSIOp>(outer_->loc_, lhs, rhs);
+      mlir::Value product = outer_->builder_.create<mlir::arith::MulIOp>(outer_->loc_, quotient, rhs);
+      return outer_->builder_.create<mlir::arith::SubIOp>(outer_->loc_, lhs, product);
+    }
+
+    mlir::Value VisitExpr_(const tir::MinNode* op) final {
+      DataType compare_dtype = op->dtype;
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), compare_dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), compare_dtype);
+      mlir::Value cond;
+      if (compare_dtype.is_float()) {
+        cond = outer_->builder_.create<mlir::arith::CmpFOp>(
+            outer_->loc_, mlir::arith::CmpFPredicate::OLT, lhs, rhs);
+      } else if (compare_dtype.is_uint() || compare_dtype.is_bool()) {
+        cond = outer_->builder_.create<mlir::arith::CmpIOp>(
+            outer_->loc_, mlir::arith::CmpIPredicate::ult, lhs, rhs);
+      } else {
+        cond = outer_->builder_.create<mlir::arith::CmpIOp>(
+            outer_->loc_, mlir::arith::CmpIPredicate::slt, lhs, rhs);
+      }
+      return outer_->builder_.create<mlir::arith::SelectOp>(outer_->loc_, cond, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::MaxNode* op) final {
+      DataType compare_dtype = op->dtype;
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), compare_dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), compare_dtype);
+      mlir::Value cond;
+      if (compare_dtype.is_float()) {
+        cond = outer_->builder_.create<mlir::arith::CmpFOp>(
+            outer_->loc_, mlir::arith::CmpFPredicate::OGT, lhs, rhs);
+      } else if (compare_dtype.is_uint() || compare_dtype.is_bool()) {
+        cond = outer_->builder_.create<mlir::arith::CmpIOp>(
+            outer_->loc_, mlir::arith::CmpIPredicate::ugt, lhs, rhs);
+      } else {
+        cond = outer_->builder_.create<mlir::arith::CmpIOp>(
+            outer_->loc_, mlir::arith::CmpIPredicate::sgt, lhs, rhs);
+      }
+      return outer_->builder_.create<mlir::arith::SelectOp>(outer_->loc_, cond, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::CastNode* op) final {
+      mlir::Value value = VisitExpr(op->value);
+      return outer_->CastValue(value, op->value.dtype(), op->dtype);
+    }
+
+    mlir::Value VisitExpr_(const tir::EQNode* op) final {
+      DataType compare_dtype = op->a.dtype();
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), compare_dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), compare_dtype);
+      if (compare_dtype.is_float()) {
+        return outer_->builder_.create<mlir::arith::CmpFOp>(
+            outer_->loc_, mlir::arith::CmpFPredicate::OEQ, lhs, rhs);
+      }
+      return outer_->builder_.create<mlir::arith::CmpIOp>(outer_->loc_,
+                                                          mlir::arith::CmpIPredicate::eq, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::NENode* op) final {
+      DataType compare_dtype = op->a.dtype();
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), compare_dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), compare_dtype);
+      if (compare_dtype.is_float()) {
+        return outer_->builder_.create<mlir::arith::CmpFOp>(
+            outer_->loc_, mlir::arith::CmpFPredicate::UNE, lhs, rhs);
+      }
+      return outer_->builder_.create<mlir::arith::CmpIOp>(outer_->loc_,
+                                                          mlir::arith::CmpIPredicate::ne, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::LTNode* op) final {
+      DataType compare_dtype = op->a.dtype();
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), compare_dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), compare_dtype);
+      if (compare_dtype.is_float()) {
+        return outer_->builder_.create<mlir::arith::CmpFOp>(
+            outer_->loc_, mlir::arith::CmpFPredicate::OLT, lhs, rhs);
+      }
+      mlir::arith::CmpIPredicate predicate =
+          compare_dtype.is_uint() || compare_dtype.is_bool() ? mlir::arith::CmpIPredicate::ult
+                                                             : mlir::arith::CmpIPredicate::slt;
+      return outer_->builder_.create<mlir::arith::CmpIOp>(outer_->loc_, predicate, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::LENode* op) final {
+      DataType compare_dtype = op->a.dtype();
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), compare_dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), compare_dtype);
+      if (compare_dtype.is_float()) {
+        return outer_->builder_.create<mlir::arith::CmpFOp>(
+            outer_->loc_, mlir::arith::CmpFPredicate::OLE, lhs, rhs);
+      }
+      mlir::arith::CmpIPredicate predicate =
+          compare_dtype.is_uint() || compare_dtype.is_bool() ? mlir::arith::CmpIPredicate::ule
+                                                             : mlir::arith::CmpIPredicate::sle;
+      return outer_->builder_.create<mlir::arith::CmpIOp>(outer_->loc_, predicate, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::GTNode* op) final {
+      DataType compare_dtype = op->a.dtype();
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), compare_dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), compare_dtype);
+      if (compare_dtype.is_float()) {
+        return outer_->builder_.create<mlir::arith::CmpFOp>(
+            outer_->loc_, mlir::arith::CmpFPredicate::OGT, lhs, rhs);
+      }
+      mlir::arith::CmpIPredicate predicate =
+          compare_dtype.is_uint() || compare_dtype.is_bool() ? mlir::arith::CmpIPredicate::ugt
+                                                             : mlir::arith::CmpIPredicate::sgt;
+      return outer_->builder_.create<mlir::arith::CmpIOp>(outer_->loc_, predicate, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::GENode* op) final {
+      DataType compare_dtype = op->a.dtype();
+      mlir::Value lhs = outer_->CastValue(VisitExpr(op->a), op->a.dtype(), compare_dtype);
+      mlir::Value rhs = outer_->CastValue(VisitExpr(op->b), op->b.dtype(), compare_dtype);
+      if (compare_dtype.is_float()) {
+        return outer_->builder_.create<mlir::arith::CmpFOp>(
+            outer_->loc_, mlir::arith::CmpFPredicate::OGE, lhs, rhs);
+      }
+      mlir::arith::CmpIPredicate predicate =
+          compare_dtype.is_uint() || compare_dtype.is_bool() ? mlir::arith::CmpIPredicate::uge
+                                                             : mlir::arith::CmpIPredicate::sge;
+      return outer_->builder_.create<mlir::arith::CmpIOp>(outer_->loc_, predicate, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::AndNode* op) final {
+      mlir::Value lhs = outer_->LowerConditionValue(VisitExpr(op->a), op->a.dtype());
+      mlir::Value rhs = outer_->LowerConditionValue(VisitExpr(op->b), op->b.dtype());
+      return outer_->builder_.create<mlir::arith::AndIOp>(outer_->loc_, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::OrNode* op) final {
+      mlir::Value lhs = outer_->LowerConditionValue(VisitExpr(op->a), op->a.dtype());
+      mlir::Value rhs = outer_->LowerConditionValue(VisitExpr(op->b), op->b.dtype());
+      return outer_->builder_.create<mlir::arith::OrIOp>(outer_->loc_, lhs, rhs);
+    }
+
+    mlir::Value VisitExpr_(const tir::NotNode* op) final {
+      mlir::Value value = outer_->LowerConditionValue(VisitExpr(op->a), op->a.dtype());
+      mlir::Value one = outer_->ConstantIntLike(1, outer_->builder_.getI1Type());
+      return outer_->builder_.create<mlir::arith::XOrIOp>(outer_->loc_, value, one);
+    }
+
+    mlir::Value VisitExpr_(const tir::SelectNode* op) final {
+      mlir::Value cond = outer_->LowerConditionValue(VisitExpr(op->condition), op->condition.dtype());
+      mlir::Value true_value =
+          outer_->CastValue(VisitExpr(op->true_value), op->true_value.dtype(), op->dtype);
+      mlir::Value false_value =
+          outer_->CastValue(VisitExpr(op->false_value), op->false_value.dtype(), op->dtype);
+      return outer_->builder_.create<mlir::arith::SelectOp>(outer_->loc_, cond, true_value,
+                                                            false_value);
+    }
+
+    mlir::Value VisitExpr_(const IntImmNode* op) final {
+      mlir::Type type = outer_->LowerScalarType(op->dtype);
+      return outer_->ConstantIntLike(op->value, type);
+    }
+
+    mlir::Value VisitExpr_(const FloatImmNode* op) final {
+      mlir::FloatType type = mlir::cast<mlir::FloatType>(outer_->LowerScalarType(op->dtype));
+      return outer_->builder_.create<mlir::arith::ConstantOp>(
+          outer_->loc_, outer_->builder_.getFloatAttr(type, op->value));
+    }
+
+    mlir::Value VisitExprDefault_(const Object* op) final {
+      LOG(FATAL) << "Unsupported TIR expr for linalg.generic region lowering: " << op->GetTypeKey();
+      TVM_FFI_UNREACHABLE();
+    }
+
+    TIRToMLIRLowerer* outer_;
+    std::vector<tir::Var> block_vars_;
+    std::unordered_map<const Object*, mlir::Value> input_values_;
   };
 
   using ValueMap = std::unordered_map<const Object*, mlir::Value>;
@@ -230,6 +628,19 @@ private:
     const auto* lhs_imm = lhs.as<IntImmNode>();
     const auto* rhs_imm = rhs.as<IntImmNode>();
     return lhs_imm != nullptr && rhs_imm != nullptr && lhs_imm->value == rhs_imm->value;
+  }
+
+  bool IndicesMatchIdentityVars(const Array<PrimExpr>& indices, llvm::ArrayRef<tir::Var> vars) {
+    if (indices.size() != vars.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < indices.size(); ++i) {
+      const auto* var = indices[i].as<tir::VarNode>();
+      if (var == nullptr || var != vars[i].get()) {
+        return false;
+      }
+    }
+    return true;
   }
 
   int64_t GetStaticInt(const PrimExpr& expr, const char* what) {
@@ -709,6 +1120,135 @@ private:
                                             mlir::ValueRange{c_view});
   }
 
+  bool MatchElementwiseLoopNest(const tir::ForNode* outer, ElementwiseLoopNestMatch* match) {
+    const tir::ForNode* current = outer;
+    while (true) {
+      if (!(current->kind == tir::ForKind::kSerial || current->kind == tir::ForKind::kUnrolled) ||
+          current->thread_binding.defined() || !tir::is_zero(current->min) ||
+          (current->step.defined() && !tir::is_one(current->step.value()))) {
+        return false;
+      }
+      match->loops.push_back(current);
+
+      if (const auto* inner = current->body.as<tir::ForNode>()) {
+        current = inner;
+        continue;
+      }
+      match->block_realize = current->body.as<tir::BlockRealizeNode>();
+      if (match->block_realize == nullptr || !tir::is_one(match->block_realize->predicate)) {
+        return false;
+      }
+      break;
+    }
+
+    match->block = match->block_realize->block.get();
+    if (match->block->init.defined() || !match->block->alloc_buffers.empty() ||
+        !match->block->match_buffers.empty() ||
+        match->block->iter_vars.size() != match->loops.size() ||
+        match->block_realize->iter_values.size() != match->loops.size()) {
+      return false;
+    }
+
+    for (size_t i = 0; i < match->loops.size(); ++i) {
+      const tir::IterVar& iter_var = match->block->iter_vars[i];
+      if (iter_var->iter_type != tir::IterVarType::kDataPar) {
+        return false;
+      }
+      const auto* iter_value_var = match->block_realize->iter_values[i].as<tir::VarNode>();
+      if (iter_value_var == nullptr || iter_value_var != match->loops[i]->loop_var.get()) {
+        return false;
+      }
+      match->block_vars.push_back(iter_var->var);
+    }
+
+    match->store = match->block->body.as<tir::BufferStoreNode>();
+    if (match->store == nullptr || match->store->predicate.defined() ||
+        !IndicesMatchIdentityVars(match->store->indices, match->block_vars)) {
+      return false;
+    }
+
+    const tir::Buffer& output_buffer = match->store->buffer;
+    ValidateContiguousBuffer(output_buffer);
+    if (output_buffer->shape.size() != match->loops.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < match->loops.size(); ++i) {
+      if (!analyzer_.CanProveEqual(output_buffer->shape[i], match->loops[i]->extent)) {
+        return false;
+      }
+    }
+
+    ElementwiseExprAnalyzer analyzer(match->block_vars);
+    if (!analyzer.Analyze(match->store->value)) {
+      return false;
+    }
+    match->input_buffers = analyzer.input_buffers();
+
+    for (const tir::Buffer& input_buffer : match->input_buffers) {
+      if (input_buffer.get() == output_buffer.get()) {
+        return false;
+      }
+      ValidateContiguousBuffer(input_buffer);
+      if (input_buffer->shape.size() != match->loops.size()) {
+        return false;
+      }
+      for (size_t i = 0; i < match->loops.size(); ++i) {
+        if (!analyzer_.CanProveEqual(input_buffer->shape[i], match->loops[i]->extent)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  bool TryLowerElementwiseLoopNest(const tir::ForNode* outer) {
+    ElementwiseLoopNestMatch match;
+    if (!MatchElementwiseLoopNest(outer, &match)) {
+      return false;
+    }
+
+    llvm::SmallVector<mlir::Value, 4> input_values;
+    input_values.reserve(match.input_buffers.size());
+    for (const tir::Buffer& input_buffer : match.input_buffers) {
+      input_values.push_back(LookupBufferValue(input_buffer));
+    }
+
+    mlir::Value output_value = LookupBufferValue(match.store->buffer);
+    size_t rank = match.loops.size();
+    mlir::AffineMap identity_map = mlir::AffineMap::getMultiDimIdentityMap(rank, &context_);
+    llvm::SmallVector<mlir::AffineMap, 4> indexing_maps(match.input_buffers.size() + 1,
+                                                        identity_map);
+    llvm::SmallVector<mlir::utils::IteratorType, 4> iterator_types(
+        rank, mlir::utils::IteratorType::parallel);
+
+    mlir::linalg::GenericOp generic = builder_.create<mlir::linalg::GenericOp>(
+        loc_, mlir::ValueRange(input_values), mlir::ValueRange{output_value}, indexing_maps,
+        iterator_types);
+
+    mlir::Block* body = new mlir::Block();
+    generic.getRegion().push_back(body);
+    for (const tir::Buffer& input_buffer : match.input_buffers) {
+      body->addArgument(LowerScalarType(input_buffer->dtype), loc_);
+    }
+    body->addArgument(LowerScalarType(match.store->buffer->dtype), loc_);
+
+    {
+      mlir::OpBuilder::InsertionGuard guard(builder_);
+      builder_.setInsertionPointToStart(body);
+      llvm::SmallVector<mlir::Value, 4> element_args;
+      element_args.reserve(match.input_buffers.size());
+      for (size_t i = 0; i < match.input_buffers.size(); ++i) {
+        element_args.push_back(body->getArgument(i));
+      }
+      ElementwiseRegionExprLowerer lowerer(this, match.block_vars, match.input_buffers,
+                                           element_args);
+      mlir::Value result = lowerer.Lower(match.store->value);
+      result = CastValue(result, match.store->value.dtype(), match.store->buffer->dtype);
+      builder_.create<mlir::linalg::YieldOp>(loc_, result);
+    }
+    return true;
+  }
+
   bool LowerStatementLikeCall(const tir::CallNode* op) {
     const auto* op_node = op->op.as<OpNode>();
     if (op_node == nullptr) {
@@ -793,6 +1333,10 @@ private:
   }
 
   void VisitStmt_(const tir::ForNode* op) final {
+    if (TryLowerElementwiseLoopNest(op)) {
+      return;
+    }
+
     ICHECK(op->kind == tir::ForKind::kSerial || op->kind == tir::ForKind::kUnrolled)
         << "Only serial/unrolled loops are supported in the current linalg_riscv lowering";
     ICHECK(!op->thread_binding.defined())

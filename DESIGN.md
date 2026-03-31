@@ -826,6 +826,12 @@ for i, j:
 
 - `linalg.generic` on tensors
 
+当前已落地的 memref MVP 路径：
+
+- 对纯 `kDataPar`、identity-index、完整覆盖 buffer shape 的 elementwise loop nest
+- 直接发射 `linalg.generic` on memrefs
+- 复杂 slice / broadcast / predicated elementwise 仍然 fallback 到 `scf + memref`
+
 如果模式识别失败，则：
 
 - `scf.for`
