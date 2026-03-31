@@ -1392,12 +1392,12 @@ private:
     return indices;
   }
 
-  bool RegionsHaveSameStaticExtents(const tir::BufferRegion& lhs, const tir::BufferRegion& rhs) {
+  bool RegionsHaveSameExtents(const tir::BufferRegion& lhs, const tir::BufferRegion& rhs) {
     if (lhs->region.size() != rhs->region.size()) {
       return false;
     }
     for (size_t i = 0; i < lhs->region.size(); ++i) {
-      if (!AreStaticEqual(lhs->region[i]->extent, rhs->region[i]->extent)) {
+      if (!analyzer_.CanProveEqual(lhs->region[i]->extent, rhs->region[i]->extent)) {
         return false;
       }
     }
@@ -1430,7 +1430,7 @@ private:
     mlir::Value dst_memref = LookupBufferValue(dst_buffer);
 
     if (src_region->region.size() == dst_region->region.size()) {
-      if (src_buffer->dtype == dst_buffer->dtype && RegionsHaveSameStaticExtents(src_region, dst_region)) {
+      if (src_buffer->dtype == dst_buffer->dtype && RegionsHaveSameExtents(src_region, dst_region)) {
         builder_.create<mlir::memref::CopyOp>(loc_, CreateSubview(src_region), CreateSubview(dst_region));
         return;
       }

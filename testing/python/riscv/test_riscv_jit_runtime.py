@@ -45,6 +45,37 @@ def test_tilelang_compile_runs_riscv_host_adapter():
 
 
 @T.prim_func
+def tile_dynamic_copy(
+    A: T.Tensor((N_DYNAMIC,), "float32"),
+    B: T.Tensor((N_DYNAMIC,), "float32"),
+):
+    with T.Kernel(1, threads=1):
+        A_shared = T.alloc_shared((N_DYNAMIC,), "float32")
+        T.copy(A, A_shared)
+        T.copy(A_shared, B)
+
+
+def test_tilelang_compile_runs_riscv_host_adapter_with_dynamic_copy():
+    func = tile_dynamic_copy.with_attr("global_symbol", "tile_dynamic_copy_runtime")
+    kernel = tilelang.compile(func, out_idx=[1], target="riscv")
+
+    data0 = torch.arange(7, dtype=torch.float32)
+    out0 = kernel(data0)
+
+    data1 = torch.linspace(-2.0, 3.0, steps=11, dtype=torch.float32)
+    out1 = kernel(data1)
+
+    source = kernel.get_kernel_source()
+    kernel.close()
+
+    assert "func.func @tile_dynamic_copy_runtime" in source
+    assert source.count("memref.copy") == 2
+    assert "memref.subview" in source
+    torch.testing.assert_close(out0, data0)
+    torch.testing.assert_close(out1, data1)
+
+
+@T.prim_func
 def tile_matmul_transpose_b(
     A: T.Tensor((2, 3), "float32"),
     B: T.Tensor((4, 3), "float32"),

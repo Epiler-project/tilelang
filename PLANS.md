@@ -670,9 +670,10 @@ Run a curated set of backend-neutral examples end to end.
     - `tilelang.compile(..., target="riscv")` singleton-dim GEMV host execution
     - `tilelang.compile(..., target="riscv")` compile-time grouped GEMM host execution
     - `tilelang.compile(..., target="riscv")` dynamic grouped GEMM host execution
+    - `tilelang.compile(..., target="riscv")` dynamic same-rank copy host execution
     - `tilelang.compile(..., target="riscv")` dynamic rank-reduced copy host execution
     - full `testing/python/riscv` regression currently passes on this machine:
-      `87 passed, 1 skipped`
+      `89 passed, 1 skipped`
   - dynamic grouped GEMM lowering status:
     - runtime dynamic `group_count` plus `Offsets` / `Sizes` now lower as a single
       `scf.for`-driven grouped dispatch
@@ -683,6 +684,8 @@ Run a curated set of backend-neutral examples end to end.
     - symbolic compact row-major strides remain accepted in the JIT path
     - dynamic `T.copy` and `T.gemm` host kernels are covered as a portable `copy + gemm`
       path, not just a direct loop fallback
+    - same-dtype dynamic equal-extent `T.copy` now lowers through
+      `memref.subview + memref.copy` instead of scalarized copy loops
   - structured reduction lowering status:
     - single-axis full-shape `sum` / `min` / `max` now lower to `linalg.fill + linalg.reduce`
     - row-wise max kernels such as the first reduction stage in `example_online_softmax.py`
@@ -696,6 +699,8 @@ Run a curated set of backend-neutral examples end to end.
       `example_online_softmax.py` are covered by the same structured path
   - rank-reduced slice lowering status:
     - static-1 dimensions can now be dropped through rank-reduced `memref.subview`
+    - same-dtype `tl.copy` now lowers equal-extent same-rank slices via
+      `memref.subview + memref.copy`
     - same-dtype `tl.copy` now lowers logical-shape-compatible rank-reduced slices via logical
       `memref.subview + memref.copy`
     - mixed-dtype `tl.copy` still falls back to the explicit `scf + memref.load/store` path

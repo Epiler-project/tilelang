@@ -447,13 +447,15 @@ Python DSL
       `scf.for`-driven grouped dispatch with symbolic slices inside the loop body
     - direct `tilelang.compile(..., target="riscv")` dynamic grouped-gemm kernels are covered by
       MLIR, host-runtime, and example tests
-  - rank-reduced copy coverage on the host path
-    - same-dtype logical-shape-compatible `tl.copy` slices now lower through
+  - structured copy coverage on the host path
+    - same-dtype same-rank `tl.copy` regions with provably equal extents now lower through
+      `CreateSubview(...) + memref.copy`, including dynamic-shape host kernels
+    - same-dtype logical-shape-compatible rank-reduced `tl.copy` slices now lower through
       `CreateLogicalSubview(...) + memref.copy`
-    - direct `tilelang.compile(..., target="riscv")` dynamic rank-reduced copy kernels are
-      covered by MLIR and host-runtime tests
+    - direct `tilelang.compile(..., target="riscv")` dynamic same-rank and dynamic rank-reduced
+      copy kernels are covered by MLIR and host-runtime tests
   - local regression status on this machine:
-    - `python -m pytest testing/python/riscv -q` passes with `87 passed, 1 skipped`
+    - `python -m pytest testing/python/riscv -q` passes with `89 passed, 1 skipped`
 - 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
 - 仍然属于后续任务的部分主要是：
   - 将 Tier 1 portable suite 固化成更稳定的长期验收矩阵与持续扩展入口
@@ -465,8 +467,8 @@ Python DSL
     - `example_convolution.py`
   - 按当前定义，Tier 1 portable completeness suite 已完成
   - 更完整的 region / subview 组合：
-    - 当前仅覆盖 contiguous / compact row-major、static-1 rank-reduction，以及 same-dtype
-      rank-reduced `tl.copy -> memref.copy`
+    - 当前仅覆盖 contiguous / compact row-major、provably-equal same-rank slices、
+      static-1 rank-reduction，以及 same-dtype rank-reduced `tl.copy -> memref.copy`
     - 更一般的非紧凑切片、复杂 stride、更多 mixed-rank 组合仍未覆盖
   - 更广的 reduction 识别：
     - 当前覆盖 single-axis、full-shape 的 sum/min/max，以及一类

@@ -504,6 +504,26 @@ def test_riscv_codegen_lowers_tilelang_copy_kernel():
     assert "memref.alloca() : memref<4xf32>" in source
 
 
+def test_riscv_codegen_lowers_dynamic_tilelang_copy_kernel_to_memref_copy():
+    @T.prim_func
+    def tile_dynamic_copy(
+        A: T.Tensor((BATCH_DYNAMIC,), "float32"),
+        B: T.Tensor((BATCH_DYNAMIC,), "float32"),
+    ):
+        with T.Kernel(1, threads=1):
+            A_shared = T.alloc_shared((BATCH_DYNAMIC,), "float32")
+            T.copy(A, A_shared)
+            T.copy(A_shared, B)
+
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_tilelang_prim(tile_dynamic_copy, "tile_dynamic_copy")
+    )
+
+    assert "func.func @tile_dynamic_copy(%arg0: memref<?xf32>, %arg1: memref<?xf32>)" in source
+    assert source.count("memref.copy") == 2
+    assert "memref.subview" in source
+
+
 def test_riscv_codegen_lowers_tilelang_fill_kernel():
     @T.prim_func
     def tile_fill(B: T.Tensor((4,), "float32")):
@@ -573,7 +593,7 @@ def test_riscv_codegen_lowers_dynamic_tilelang_gemm_to_linalg_matmul():
     assert "linalg.matmul" in source
     assert "memref.dim" in source
     assert "scf.for" in source
-    assert "memref.load" in source
+    assert source.count("memref.copy") >= 3
     assert "memref.store" in source
 
 
