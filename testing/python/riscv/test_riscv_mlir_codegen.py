@@ -430,6 +430,37 @@ def test_riscv_codegen_lowers_tilelang_gemm_to_linalg_matmul():
     assert "memref.alloca() : memref<4x4xf32>" in source
 
 
+def test_riscv_codegen_lowers_dynamic_tilelang_gemm_to_linalg_matmul():
+    m = T.dynamic("m")
+    n = T.dynamic("n")
+    k = T.dynamic("k")
+
+    @T.prim_func
+    def tile_dynamic_gemm(
+        A: T.Tensor((m, k), "float32"),
+        B: T.Tensor((k, n), "float32"),
+        C: T.Tensor((m, n), "float32"),
+    ):
+        with T.Kernel(1, threads=1):
+            A_shared = T.alloc_shared((m, k), "float32")
+            B_shared = T.alloc_shared((k, n), "float32")
+            C_local = T.alloc_fragment((m, n), "float32")
+            T.clear(C_local)
+            T.copy(A, A_shared)
+            T.copy(B, B_shared)
+            T.gemm(A_shared, B_shared, C_local)
+            T.copy(C_local, C)
+
+    source = _real_mlir_source_or_skip(_build_mlir_from_tilelang_prim(tile_dynamic_gemm, "tile_dynamic_gemm"))
+
+    assert "func.func @tile_dynamic_gemm(%arg0: memref<?x?xf32>, %arg1: memref<?x?xf32>, %arg2: memref<?x?xf32>)" in source
+    assert "linalg.matmul" in source
+    assert "memref.dim" in source
+    assert "scf.for" in source
+    assert "memref.load" in source
+    assert "memref.store" in source
+
+
 def test_riscv_codegen_lowers_tilelang_gemm_transpose_b():
     @T.prim_func
     def tile_matmul_transpose_b(

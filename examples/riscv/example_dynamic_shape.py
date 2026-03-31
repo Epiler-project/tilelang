@@ -13,18 +13,19 @@ K = T.dynamic("k")
 
 @T.prim_func
 def dynamic_matmul(
-    A: T.Buffer((M, K), "float32"),
-    B: T.Buffer((K, N), "float32"),
-    C: T.Buffer((M, N), "float32"),
+    A: T.Tensor((M, K), "float32"),
+    B: T.Tensor((K, N), "float32"),
+    C: T.Tensor((M, N), "float32"),
 ):
-    for i, j, kk in T.grid(M, N, K):
-        with T.block("matmul"):
-            vi = T.axis.spatial(M, i)
-            vj = T.axis.spatial(N, j)
-            vk = T.axis.reduce(K, kk)
-            with T.init():
-                C[vi, vj] = T.float32(0)
-            C[vi, vj] = C[vi, vj] + A[vi, vk] * B[vk, vj]
+    with T.Kernel(1, threads=1):
+        A_shared = T.alloc_shared((M, K), "float32")
+        B_shared = T.alloc_shared((K, N), "float32")
+        C_local = T.alloc_fragment((M, N), "float32")
+        T.clear(C_local)
+        T.copy(A, A_shared)
+        T.copy(B, B_shared)
+        T.gemm(A_shared, B_shared, C_local)
+        T.copy(C_local, C)
 
 
 def make_inputs(m: int = 3, n: int = 4, k: int = 5) -> tuple[np.ndarray, np.ndarray]:

@@ -993,13 +993,13 @@ private:
     return builder_.create<mlir::memref::AllocaOp>(loc_, memref_type);
   }
 
-  mlir::Value MaterializeTranspose2D(mlir::Value source, int64_t rows, int64_t cols,
-                                     DataType element_dtype) {
-    mlir::Value transposed = CreateStaticAlloca({cols, rows}, element_dtype);
+  mlir::Value MaterializeTranspose2D(mlir::Value source, const PrimExpr& rows,
+                                     const PrimExpr& cols, DataType element_dtype) {
+    mlir::Value transposed = CreateAlloca(Array<PrimExpr>{cols, rows}, element_dtype);
     mlir::Value zero = ZeroIndex();
     mlir::Value one = ConstantIntLike(1, builder_.getIndexType());
-    mlir::Value row_upper = ConstantIntLike(rows, builder_.getIndexType());
-    mlir::Value col_upper = ConstantIntLike(cols, builder_.getIndexType());
+    mlir::Value row_upper = AsIndex(VisitExpr(rows), rows.dtype());
+    mlir::Value col_upper = AsIndex(VisitExpr(cols), cols.dtype());
 
     mlir::scf::ForOp row_loop = builder_.create<mlir::scf::ForOp>(loc_, zero, row_upper, one);
     {
@@ -1138,7 +1138,7 @@ private:
                                         src_region->region[i]->min.dtype()));
           continue;
         }
-        ICHECK(AreStaticEqual(src_region->region[i]->extent, dst_region->region[i]->extent))
+        ICHECK(analyzer_.CanProveEqual(src_region->region[i]->extent, dst_region->region[i]->extent))
             << "tl.copy currently requires matching extents, except for static-1 broadcast";
         src_indices.push_back(OffsetIndex(coords[i], src_region->region[i]->min));
       }
@@ -1157,9 +1157,9 @@ private:
 
     bool transpose_a = GetStaticBool(op->args[3], "tl.gemm transpose_a");
     bool transpose_b = GetStaticBool(op->args[4], "tl.gemm transpose_b");
-    int64_t m = GetStaticInt(op->args[5], "tl.gemm M");
-    int64_t n = GetStaticInt(op->args[6], "tl.gemm N");
-    int64_t k = GetStaticInt(op->args[7], "tl.gemm K");
+    PrimExpr m = op->args[5];
+    PrimExpr n = op->args[6];
+    PrimExpr k = op->args[7];
     bool clear_accum = GetStaticBool(op->args[9], "tl.gemm clear_accum");
 
     ICHECK_EQ(a_region->region.size(), 2) << "Only 2D tl.gemm A operands are supported";
@@ -1167,21 +1167,31 @@ private:
     ICHECK_EQ(c_region->region.size(), 2) << "Only 2D tl.gemm C operands are supported";
 
     if (transpose_a) {
-      ICHECK_EQ(GetStaticInt(a_region->region[0]->extent, "tl.gemm A K extent"), k);
-      ICHECK_EQ(GetStaticInt(a_region->region[1]->extent, "tl.gemm A M extent"), m);
+      ICHECK(analyzer_.CanProveEqual(a_region->region[0]->extent, k))
+          << "tl.gemm A K extent must match K";
+      ICHECK(analyzer_.CanProveEqual(a_region->region[1]->extent, m))
+          << "tl.gemm A M extent must match M";
     } else {
-      ICHECK_EQ(GetStaticInt(a_region->region[0]->extent, "tl.gemm A M extent"), m);
-      ICHECK_EQ(GetStaticInt(a_region->region[1]->extent, "tl.gemm A K extent"), k);
+      ICHECK(analyzer_.CanProveEqual(a_region->region[0]->extent, m))
+          << "tl.gemm A M extent must match M";
+      ICHECK(analyzer_.CanProveEqual(a_region->region[1]->extent, k))
+          << "tl.gemm A K extent must match K";
     }
     if (transpose_b) {
-      ICHECK_EQ(GetStaticInt(b_region->region[0]->extent, "tl.gemm B N extent"), n);
-      ICHECK_EQ(GetStaticInt(b_region->region[1]->extent, "tl.gemm B K extent"), k);
+      ICHECK(analyzer_.CanProveEqual(b_region->region[0]->extent, n))
+          << "tl.gemm B N extent must match N";
+      ICHECK(analyzer_.CanProveEqual(b_region->region[1]->extent, k))
+          << "tl.gemm B K extent must match K";
     } else {
-      ICHECK_EQ(GetStaticInt(b_region->region[0]->extent, "tl.gemm B K extent"), k);
-      ICHECK_EQ(GetStaticInt(b_region->region[1]->extent, "tl.gemm B N extent"), n);
+      ICHECK(analyzer_.CanProveEqual(b_region->region[0]->extent, k))
+          << "tl.gemm B K extent must match K";
+      ICHECK(analyzer_.CanProveEqual(b_region->region[1]->extent, n))
+          << "tl.gemm B N extent must match N";
     }
-    ICHECK_EQ(GetStaticInt(c_region->region[0]->extent, "tl.gemm C M extent"), m);
-    ICHECK_EQ(GetStaticInt(c_region->region[1]->extent, "tl.gemm C N extent"), n);
+    ICHECK(analyzer_.CanProveEqual(c_region->region[0]->extent, m))
+        << "tl.gemm C M extent must match M";
+    ICHECK(analyzer_.CanProveEqual(c_region->region[1]->extent, n))
+        << "tl.gemm C N extent must match N";
 
     if (clear_accum) {
       FillBufferRegion(c_region, CreateZeroValue(c_region->buffer->dtype), c_region->buffer->dtype);

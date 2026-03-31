@@ -616,10 +616,12 @@ Run a curated set of backend-neutral examples end to end.
     - host/artifact coverage for `example_convolution.py`
     - `tilelang.compile(..., target="riscv")` dynamic-shape host execution
     - full `testing/python/riscv` regression currently passes on this machine:
-      `53 passed, 1 skipped`
+      `55 passed, 1 skipped`
   - dynamic-shape lowering status:
     - buffer shape vars are rebound from function memrefs via `memref.dim`
     - symbolic compact row-major strides remain accepted in the JIT path
+    - dynamic `T.copy` and `T.gemm` host kernels are covered as a portable `copy + gemm`
+      path, not just a direct loop fallback
   - broader completeness work should port the portable expansion set into backend-neutral
     `examples/riscv/` style entry points instead of trying to reuse the original GPU-oriented
     scripts unchanged

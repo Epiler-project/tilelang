@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 
-from tilelang.tladapter.toolchain import ToolchainNotFoundError, resolve_tool
+from tilelang.tladapter.toolchain import ToolchainNotFoundError, resolve_llvm_root, resolve_tool
 
 from .libgen import DEFAULT_RISCV_TRIPLE, emit_llvm_ir, emit_mlir, emit_object
 
@@ -527,6 +527,8 @@ def build_host_shared_library(
     llvm_ir = emit_llvm_ir(value, pipeline=pipeline)
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    llvm_root = resolve_llvm_root()
+    llvm_lib_dir = llvm_root / "lib"
     with tempfile.TemporaryDirectory(prefix="tilelang-host-compile-") as temp_dir:
         temp_dir_path = Path(temp_dir)
         ll_path = temp_dir_path / f"{out_path.stem}.ll"
@@ -542,6 +544,10 @@ def build_host_shared_library(
             str(ll_path),
             "-o",
             str(out_path),
+            f"-L{llvm_lib_dir}",
+            f"-Wl,-rpath,{llvm_lib_dir}",
+            "-lmlir_c_runner_utils",
+            "-lmlir_runner_utils",
         ]
         active_triple = triple or resolve_host_triple()
         if active_triple:

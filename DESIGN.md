@@ -379,6 +379,9 @@ Python DSL
   - dynamic-shape buffer params:
     - symbolic shape vars are rebound from `memref.dim`
     - symbolic compact row-major strides such as `(k, 1)` / `(n, 1)` are accepted
+  - dynamic TileLang `T.copy` / `T.gemm` kernels on the host path
+    - `example_dynamic_shape.py` now keeps the portable `copy + gemm` structure instead of
+      falling back to a direct-loop-only example
 - 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
 - 仍然属于后续任务的部分主要是：
   - 将 Tier 1 portable suite 固化成更稳定的长期验收矩阵与持续扩展入口
