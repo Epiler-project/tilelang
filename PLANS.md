@@ -28,6 +28,7 @@ These decisions should be treated as fixed unless a blocking issue appears.
 - internal compute IR: prefer `tensor + linalg`; fallback to `scf + memref` when structure recovery fails
 - MVP feature set:
   - scalar arithmetic
+    - `Add/Sub/Mul/Div/Mod/FloorDiv/FloorMod/Min/Max`
   - `For`, `IfThenElse`, `SeqStmt`
   - `AllocBuffer`, `BufferLoad`, `BufferStore`
   - structured region/slice
@@ -651,6 +652,7 @@ Improve performance after correctness is stable.
 - start with:
   - constants
   - arithmetic
+    - `Add/Sub/Mul/Div/Mod/FloorDiv/FloorMod/Min/Max`
   - loop lowering
   - if lowering
   - alloc/load/store

@@ -1005,6 +1005,76 @@ private:
     return builder_.create<mlir::arith::DivSIOp>(loc_, lhs, rhs);
   }
 
+  mlir::Value VisitExpr_(const tir::ModNode* op) final {
+    mlir::Value lhs = CastValue(VisitExpr(op->a), op->a.dtype(), op->dtype);
+    mlir::Value rhs = CastValue(VisitExpr(op->b), op->b.dtype(), op->dtype);
+    if (op->dtype.is_float()) {
+      return builder_.create<mlir::arith::RemFOp>(loc_, lhs, rhs);
+    }
+    if (op->dtype.is_uint() || op->dtype.is_bool()) {
+      return builder_.create<mlir::arith::RemUIOp>(loc_, lhs, rhs);
+    }
+    return builder_.create<mlir::arith::RemSIOp>(loc_, lhs, rhs);
+  }
+
+  mlir::Value VisitExpr_(const tir::FloorDivNode* op) final {
+    mlir::Value lhs = CastValue(VisitExpr(op->a), op->a.dtype(), op->dtype);
+    mlir::Value rhs = CastValue(VisitExpr(op->b), op->b.dtype(), op->dtype);
+    ICHECK(!op->dtype.is_float()) << "tir.FloorDiv on floating-point dtype is not supported yet";
+    if (op->dtype.is_uint() || op->dtype.is_bool()) {
+      return builder_.create<mlir::arith::DivUIOp>(loc_, lhs, rhs);
+    }
+    return builder_.create<mlir::arith::FloorDivSIOp>(loc_, lhs, rhs);
+  }
+
+  mlir::Value VisitExpr_(const tir::FloorModNode* op) final {
+    mlir::Value lhs = CastValue(VisitExpr(op->a), op->a.dtype(), op->dtype);
+    mlir::Value rhs = CastValue(VisitExpr(op->b), op->b.dtype(), op->dtype);
+    ICHECK(!op->dtype.is_float()) << "tir.FloorMod on floating-point dtype is not supported yet";
+    if (op->dtype.is_uint() || op->dtype.is_bool()) {
+      return builder_.create<mlir::arith::RemUIOp>(loc_, lhs, rhs);
+    }
+    mlir::Value quotient = builder_.create<mlir::arith::FloorDivSIOp>(loc_, lhs, rhs);
+    mlir::Value product = builder_.create<mlir::arith::MulIOp>(loc_, quotient, rhs);
+    return builder_.create<mlir::arith::SubIOp>(loc_, lhs, product);
+  }
+
+  mlir::Value VisitExpr_(const tir::MinNode* op) final {
+    DataType compare_dtype = op->dtype;
+    mlir::Value lhs = CastValue(VisitExpr(op->a), op->a.dtype(), compare_dtype);
+    mlir::Value rhs = CastValue(VisitExpr(op->b), op->b.dtype(), compare_dtype);
+    mlir::Value cond;
+    if (compare_dtype.is_float()) {
+      cond = builder_.create<mlir::arith::CmpFOp>(loc_, mlir::arith::CmpFPredicate::OLT, lhs,
+                                                  rhs);
+    } else if (compare_dtype.is_uint() || compare_dtype.is_bool()) {
+      cond = builder_.create<mlir::arith::CmpIOp>(loc_, mlir::arith::CmpIPredicate::ult, lhs,
+                                                  rhs);
+    } else {
+      cond = builder_.create<mlir::arith::CmpIOp>(loc_, mlir::arith::CmpIPredicate::slt, lhs,
+                                                  rhs);
+    }
+    return builder_.create<mlir::arith::SelectOp>(loc_, cond, lhs, rhs);
+  }
+
+  mlir::Value VisitExpr_(const tir::MaxNode* op) final {
+    DataType compare_dtype = op->dtype;
+    mlir::Value lhs = CastValue(VisitExpr(op->a), op->a.dtype(), compare_dtype);
+    mlir::Value rhs = CastValue(VisitExpr(op->b), op->b.dtype(), compare_dtype);
+    mlir::Value cond;
+    if (compare_dtype.is_float()) {
+      cond = builder_.create<mlir::arith::CmpFOp>(loc_, mlir::arith::CmpFPredicate::OGT, lhs,
+                                                  rhs);
+    } else if (compare_dtype.is_uint() || compare_dtype.is_bool()) {
+      cond = builder_.create<mlir::arith::CmpIOp>(loc_, mlir::arith::CmpIPredicate::ugt, lhs,
+                                                  rhs);
+    } else {
+      cond = builder_.create<mlir::arith::CmpIOp>(loc_, mlir::arith::CmpIPredicate::sgt, lhs,
+                                                  rhs);
+    }
+    return builder_.create<mlir::arith::SelectOp>(loc_, cond, lhs, rhs);
+  }
+
   mlir::Value VisitExpr_(const tir::CastNode* op) final {
     mlir::Value value = VisitExpr(op->value);
     return CastValue(value, op->value.dtype(), op->dtype);

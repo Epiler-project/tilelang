@@ -95,6 +95,92 @@ def add(A: T.Buffer((4,), "float32"), B: T.Buffer((4,), "float32"), C: T.Buffer(
     assert source.count("memref.load") >= 2
 
 
+def test_riscv_codegen_lowers_float_max():
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_source(
+            """
+# from tvm.script import tir as T
+@T.prim_func
+def max_elem(
+    A: T.Buffer((4,), "float32"),
+    B: T.Buffer((4,), "float32"),
+    C: T.Buffer((4,), "float32"),
+):
+    for i in T.serial(4):
+        with T.block("max_elem"):
+            vi = T.axis.spatial(4, i)
+            C[vi] = T.max(A[vi], B[vi])
+""",
+            "max_elem",
+        )
+    )
+
+    assert "func.func @max_elem(%arg0: memref<4xf32>, %arg1: memref<4xf32>, %arg2: memref<4xf32>)" in source
+    assert "arith.select" in source
+    assert "arith.cmpf ogt" in source
+
+
+def test_riscv_codegen_lowers_int_min():
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_source(
+            """
+# from tvm.script import tir as T
+@T.prim_func
+def min_elem(
+    A: T.Buffer((4,), "int32"),
+    B: T.Buffer((4,), "int32"),
+    C: T.Buffer((4,), "int32"),
+):
+    for i in T.serial(4):
+        with T.block("min_elem"):
+            vi = T.axis.spatial(4, i)
+            C[vi] = T.min(A[vi], B[vi])
+""",
+            "min_elem",
+        )
+    )
+
+    assert "func.func @min_elem(%arg0: memref<4xi32>, %arg1: memref<4xi32>, %arg2: memref<4xi32>)" in source
+    assert "arith.select" in source
+    assert "arith.cmpi slt" in source
+
+
+def test_riscv_codegen_lowers_div_mod_expression_family():
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_source(
+            """
+# from tvm.script import tir as T
+@T.prim_func
+def div_mod_family(
+    A: T.Buffer((4,), "int32"),
+    B: T.Buffer((4,), "int32"),
+    C: T.Buffer((4,), "int32"),
+    D: T.Buffer((4,), "int32"),
+):
+    for i in T.serial(4):
+        with T.block("truncmod"):
+            vi = T.axis.spatial(4, i)
+            B[vi] = T.truncmod(A[vi], 3)
+    for i in T.serial(4):
+        with T.block("floordiv"):
+            vi = T.axis.spatial(4, i)
+            C[vi] = T.floordiv(A[vi], 3)
+    for i in T.serial(4):
+        with T.block("floormod"):
+            vi = T.axis.spatial(4, i)
+            D[vi] = T.floormod(A[vi], 3)
+""",
+            "div_mod_family",
+        )
+    )
+
+    assert "func.func @div_mod_family" in source
+    assert "arith.remsi" in source
+    assert "arith.floordivsi" in source
+    assert "arith.muli" in source
+    assert source.count("arith.subi") >= 1
+
+
 def test_riscv_codegen_lowers_scalar_params():
     source = _real_mlir_source_or_skip(
         _build_mlir_from_source(

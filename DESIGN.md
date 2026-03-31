@@ -380,7 +380,7 @@ Python DSL
 - 标量表达式
   - `IntImm` / `FloatImm`
   - `Cast`
-  - `Add/Sub/Mul/Div/Min/Max`
+  - `Add/Sub/Mul/Div/Mod/FloorDiv/FloorMod/Min/Max`
   - `Cmp`
   - `Select`
 - 控制流
@@ -452,6 +452,8 @@ codegen 的核心对象应是：
 | `IfThenElseNode` | `scf.if` |
 | `IntImm/FloatImm` | `arith.constant` |
 | `Add/Sub/Mul/Div` | `arith.*` |
+| `Mod` | `arith.remf/remsi/remui` |
+| `FloorDiv/FloorMod` | `arith.floordivsi` / `arith.divui` / `floordiv + mul + sub` |
 | `Min/Max` | `arith.minimumf/maximumf` 或 cmp+select |
 | `Cast` | `arith.ext*` / `arith.trunc*` / `arith.index_cast` |
 | `BufferLoad` | `memref.load` 或 `tensor.extract` |
@@ -714,6 +716,7 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
 - 新增 codegen visitor
 - 打通：
   - 常量/算术
+    - `Add/Sub/Mul/Div/Mod/FloorDiv/FloorMod/Min/Max`
   - `For`
   - `If`
   - `AllocBuffer`
