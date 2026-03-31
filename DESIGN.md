@@ -82,6 +82,76 @@ TileLang DSL
 
 这样能先验证 IR 设计是否成立，再做后续性能优化。
 
+### 3.4 原始 `examples/` 的定位
+
+原始 `tilelang` 仓库中的 `examples/` 适合被当作**覆盖素材池**，但不适合直接被当作
+“当前 `linalg_riscv` backend 已完整实现”的唯一标准。
+
+对当前仓库中原始 `examples/` 做静态扫描后，可以看到一个很明确的事实：
+
+- 剔除 `test_*.py` / `regression_*.py` / `conftest.py` 后，仍有 `201` 个 Python 示例
+- 其中：
+  - `142` 个使用 `T.Kernel`
+  - `135` 个使用 `alloc_shared`
+  - `132` 个使用 `alloc_fragment`
+  - `121` 个使用 `T.Pipelined`
+  - `105` 个碰到 `TMA`
+
+这说明原始 `examples/` 中相当大一部分在验证的是：
+
+- GPU thread/block 执行模型
+- shared / fragment / local memory hierarchy
+- barrier / pipeline / async copy
+- TMA / tensorcore / layout intrinsic
+
+而不只是“算法语义是否能映射到 `linalg + memref`”。
+
+因此，本项目应采用**分层覆盖策略**：
+
+- Tier 0：当前 MVP demo surface
+  - `examples/riscv/example_vector_add.py`
+  - `examples/riscv/example_copy.py`
+  - `examples/riscv/example_reduce_sum.py`
+  - `examples/riscv/example_matmul.py`
+- Tier 1：portable completeness suite
+  - 原始算法语义适合 `linalg_riscv`，但通常需要改写成 backend-neutral 版本
+  - 代表性目标包括：
+    - `examples/elementwise/example_elementwise_add.py`
+    - `examples/gemm/example_gemm.py`
+    - `examples/dynamic_shape/example_dynamic.py`
+    - `examples/convolution/example_convolution.py`
+    - `examples/norm/rms_norm.py`
+    - `examples/online_softmax/online_softmax.py`
+    - `examples/topk/example_topk.py`
+- Tier 2：后续结构化扩展
+  - 算法本身未必依赖 GPU，但需要更广的 indexing / shape / reduction / dispatch 支持
+  - 代表性目标包括：
+    - `examples/grouped_gemm/example_grouped_gemm_fwd.py`
+    - `examples/gemv/example_gemv.py`
+    - 经规范化后的部分稀疏/分组算子
+- Tier 3：当前非目标
+  - 明确依赖 GPU execution model 的示例不纳入当前完成标准
+  - 包括但不限于：
+    - `examples/warp_specialize/`
+    - `examples/flash_attention/`
+    - `examples/flash_decoding/`
+    - `examples/attention_sink/`
+    - `examples/hadamard_transform/`
+    - `examples/gemm_fp8/`
+    - `examples/gemm_sm100/`
+    - `examples/dequantize_gemm/`
+    - `examples/sparse_tensorcore/`
+
+这里“支持某个原始 example”的含义也需要固定：
+
+- 优先保留原始算法语义与输入输出契约
+- 但不要求保留原文件里 GPU-oriented 的 schedule / storage scope / pipeline 写法
+- 必要时允许在 `examples/riscv/` 或后续的 portable example 目录中维护一个
+  backend-neutral 版本，用它作为 `linalg_riscv` 的验收入口
+
+换句话说，`linalg_riscv` 当前要对齐的是**可移植算法子集**，而不是整个 TileLang GPU
+执行模型。
+
 
 ## 4. 与当前 `npuir` 分支的关系
 
@@ -296,7 +366,9 @@ Python DSL
   - `examples/riscv/example_matmul.py`
   - 上述 examples 的 `--run-host` 与 `--emit-asm/--emit-object`
   - direct `tilelang.compile(..., target="riscv")` host execution
+- 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
 - 仍然属于后续任务的部分主要是：
+  - 将 Tier 1 portable suite 逐步移植成 backend-neutral 的正式验收样例
   - 更完整的 region / subview 组合与 rank-reduction 场景
   - 更广的 reduction 识别，而不只覆盖简单 full-shape sum
   - 更广的 `linalg.generic`、`linalg.reduce` 覆盖面

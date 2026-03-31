@@ -12,7 +12,7 @@ The final target is:
 - support the MVP TileLang/TIR subset defined in `DESIGN.md`
 - emit valid MLIR
 - lower MLIR to LLVM IR and RISC-V asm/object
-- run a small set of examples for correctness checking
+- run a curated backend-neutral example set for correctness checking
 - keep existing CUDA/HIP/Metal behavior unchanged
 
 ## 2. Frozen Decisions
@@ -26,6 +26,10 @@ These decisions should be treated as fixed unless a blocking issue appears.
 - lowering split: TIR -> structured MLIR -> LLVM -> RISC-V
 - function ABI: `memref` at function boundaries
 - internal compute IR: prefer `tensor + linalg`; fallback to `scf + memref` when structure recovery fails
+- original `examples/` policy:
+  - treat the upstream `examples/` tree as a source pool for coverage planning
+  - do not require all original examples to run unchanged on `linalg_riscv`
+  - define completeness using a curated portable subset plus explicit non-goals
 - MVP feature set:
   - scalar arithmetic
     - `Add/Sub/Mul/Div/Mod/FloorDiv/FloorMod/Min/Max`
@@ -44,6 +48,7 @@ These decisions should be treated as fixed unless a blocking issue appears.
   - barrier/sync
   - custom hardware intrinsics
   - FlashAttention and other fused GPU-style kernels
+  - "support every original example unchanged"
 
 ## 3. Definition Of Done
 
@@ -67,6 +72,8 @@ The project is considered complete for MVP when all items below are true.
   - `spike`
 - there are automated tests under `testing/python/riscv/`
 - there are runnable examples under `examples/riscv/`
+- the repo documents a portable coverage matrix derived from original `examples/`
+- MVP completion does not require the original upstream examples to run unchanged
 
 ## 4. Repository Mapping
 
@@ -558,7 +565,7 @@ reconcile-unrealized-casts
 
 ### Goal
 
-Run a few examples end to end.
+Run a curated set of backend-neutral examples end to end.
 
 ### Tasks
 
@@ -580,6 +587,12 @@ Run a few examples end to end.
   - `examples/riscv/example_copy.py`
   - `examples/riscv/example_reduce_sum.py`
   - `examples/riscv/example_matmul.py`
+- define the next portable expansion set from original `examples/`:
+  - `examples/norm/rms_norm.py`
+  - `examples/online_softmax/online_softmax.py`
+  - `examples/topk/example_topk.py`
+  - `examples/convolution/example_convolution.py`
+  - `examples/dynamic_shape/example_dynamic.py`
 - each example should support:
   - print TIR
   - print MLIR
@@ -594,6 +607,9 @@ Run a few examples end to end.
   - current automated coverage includes:
     - freestanding ELF build validation on this machine
     - qemu smoke coverage when a simulator is available
+  - broader completeness work should port the portable expansion set into backend-neutral
+    `examples/riscv/` style entry points instead of trying to reuse the original GPU-oriented
+    scripts unchanged
 
 ### Acceptance
 
@@ -752,6 +768,15 @@ Create a new directory `testing/python/riscv`.
 
 These examples are the required demo surface for MVP.
 
+### 10.1 MVP Demo Surface
+
+The current MVP examples remain:
+
+- vector add
+- copy
+- reduce sum
+- matmul
+
 ### Example A: vector add
 
 Purpose:
@@ -794,6 +819,67 @@ Purpose:
 Expected ops:
 
 - `linalg.matmul`
+
+### 10.2 Portable Coverage Matrix From Original `examples/`
+
+Use the original `examples/` directory as a coverage source pool, not as an all-or-nothing
+acceptance suite.
+
+Static analysis of the current tree shows that most original examples are GPU-oriented:
+
+- `201` non-test Python examples remain after excluding `test_*.py`, `regression_*.py`,
+  and `conftest.py`
+- `142` use `T.Kernel`
+- `135` use `alloc_shared`
+- `132` use `alloc_fragment`
+- `121` use `T.Pipelined`
+- `105` mention `TMA`
+
+That means "support all original examples unchanged" would imply implementing a much larger
+TileLang GPU execution model, not just the current `linalg + memref` backend.
+
+Treat the original examples in three tiers:
+
+- Tier 1: required portable completeness suite
+  - `examples/elementwise/example_elementwise_add.py`
+  - `examples/gemm/example_gemm.py`
+  - `examples/dynamic_shape/example_dynamic.py`
+  - `examples/convolution/example_convolution.py`
+  - `examples/norm/rms_norm.py`
+  - `examples/online_softmax/online_softmax.py`
+  - `examples/topk/example_topk.py`
+  - implementation order after the current MVP demos:
+    - `examples/norm/rms_norm.py`
+    - `examples/online_softmax/online_softmax.py`
+    - `examples/topk/example_topk.py`
+    - `examples/convolution/example_convolution.py`
+    - `examples/dynamic_shape/example_dynamic.py`
+  - `examples/elementwise/example_elementwise_add.py` and `examples/gemm/example_gemm.py`
+    are already covered semantically by the current MVP demos, even though the original upstream
+    scripts are still GPU-oriented
+- Tier 2: later structured extensions
+  - `examples/grouped_gemm/example_grouped_gemm_fwd.py`
+  - `examples/gemv/example_gemv.py`
+  - selected sparse/grouped kernels after normalization
+- Tier 3: explicit non-goals for the current backend
+  - `examples/warp_specialize/`
+  - `examples/flash_attention/`
+  - `examples/flash_decoding/`
+  - `examples/attention_sink/`
+  - `examples/hadamard_transform/`
+  - `examples/gemm_fp8/`
+  - `examples/gemm_sm100/`
+  - `examples/dequantize_gemm/`
+  - `examples/sparse_tensorcore/`
+
+### 10.3 Porting Rule
+
+For Tier 1 and Tier 2 items, "support" means:
+
+- preserve the algorithm semantics and observable inputs/outputs
+- allow a backend-neutral port under `examples/riscv/` or a similar portable directory
+- do not require the original GPU-tuned schedule, storage scopes, or pipeline constructs
+  to remain unchanged
 
 ## 11. Example CLI Contract
 
