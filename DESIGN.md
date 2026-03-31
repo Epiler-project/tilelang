@@ -434,8 +434,8 @@ Python DSL
   - dynamic grouped GEMM coverage on the host path
     - `examples/riscv/example_dynamic_grouped_gemm.py` is landed as a backend-neutral Tier 2
       example
-    - compile-time fixed group loops plus runtime `Offsets` / `Sizes` tensors now lower as a
-      single `scf.for`-driven grouped dispatch with symbolic slices inside the loop body
+    - runtime dynamic `group_count` plus `Offsets` / `Sizes` tensors now lower as a single
+      `scf.for`-driven grouped dispatch with symbolic slices inside the loop body
     - direct `tilelang.compile(..., target="riscv")` dynamic grouped-gemm kernels are covered by
       MLIR, host-runtime, and example tests
   - local regression status on this machine:
@@ -462,8 +462,6 @@ Python DSL
       的规则表达式
     - 更一般的 mixed indexing / gather-scatter / predicated elementwise 仍未结构化
   - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched slice
-  - grouped-gemm dispatch beyond the current compile-time-fixed group-count plus runtime
-    `Offsets` / `Sizes` form
 
 
 ## 6. 切入点设计

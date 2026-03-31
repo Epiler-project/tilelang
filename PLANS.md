@@ -362,8 +362,6 @@ Recommended commit slicing:
     - additive expression reductions with identity + output-broadcast inputs
   - broader `linalg.generic` / `linalg.reduce` coverage beyond the current simple cases
   - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched case
-  - grouped-gemm dispatch beyond the current compile-time-fixed group-count plus runtime
-    `Offsets` / `Sizes` form
   - local `pytest testing/python/riscv -q` also requires a built TileLang/TVM Python environment with `tvm_ffi` importable
 
 ## Phase 0: Freeze Scope And Scaffolding
@@ -670,7 +668,7 @@ Run a curated set of backend-neutral examples end to end.
     - full `testing/python/riscv` regression currently passes on this machine:
       `80 passed, 1 skipped`
   - dynamic grouped GEMM lowering status:
-    - compile-time fixed group loops plus runtime `Offsets` / `Sizes` now lower as a single
+    - runtime dynamic `group_count` plus `Offsets` / `Sizes` now lower as a single
       `scf.for`-driven grouped dispatch
     - loop-indexed `match_buffer` / `alloc_buffer` bindings are deferred until the loop body so
       symbolic slice extents stay valid for `memref.subview` and `linalg.matmul`

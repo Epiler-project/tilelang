@@ -7,7 +7,7 @@ from examples.riscv.common import build_riscv_module, finalize_args, make_parser
 
 
 M_TOTAL = T.dynamic("m_total")
-GROUP_COUNT = 3
+GROUP_COUNT = T.dynamic("group_count")
 K = 4
 N = 5
 
@@ -43,12 +43,13 @@ def dynamic_grouped_gemm(
             T.copy(C_local, C_group)
 
 
-def make_inputs(group_sizes: tuple[int, int, int] = (2, 1, 3)) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def make_inputs(group_sizes: tuple[int, ...] = (2, 1, 3)) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     total_m = sum(group_sizes)
+    group_count = len(group_sizes)
     lhs = np.arange(total_m * K, dtype=np.float32).reshape(total_m, K)
-    rhs = np.arange(GROUP_COUNT * K * N, dtype=np.float32).reshape(GROUP_COUNT, K, N)
+    rhs = np.arange(group_count * K * N, dtype=np.float32).reshape(group_count, K, N)
     sizes = np.asarray(group_sizes, dtype=np.int32)
-    offsets = np.asarray([0, group_sizes[0], group_sizes[0] + group_sizes[1]], dtype=np.int32)
+    offsets = np.concatenate(([0], np.cumsum(sizes[:-1], dtype=np.int32))).astype(np.int32)
     return lhs, rhs, offsets, sizes
 
 
@@ -56,7 +57,7 @@ def dynamic_grouped_gemm_reference(
     lhs: np.ndarray, rhs: np.ndarray, offsets: np.ndarray, sizes: np.ndarray
 ) -> np.ndarray:
     outputs = []
-    for group_idx in range(GROUP_COUNT):
+    for group_idx in range(int(sizes.shape[0])):
         start = int(offsets[group_idx])
         size = int(sizes[group_idx])
         outputs.append(lhs[start : start + size] @ rhs[group_idx])

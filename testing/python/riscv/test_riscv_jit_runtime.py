@@ -20,6 +20,7 @@ GROUP_K = 4
 GROUP_N = 5
 GROUP_TOTAL_DYNAMIC = T.dynamic("group_total_dynamic")
 GROUP_COUNT_DYNAMIC = 3
+GROUP_COUNT_DYNAMIC_SYM = T.dynamic("group_count_dynamic")
 
 
 @T.prim_func
@@ -360,13 +361,13 @@ def test_tilelang_compile_runs_riscv_host_adapter_with_grouped_gemm():
 @T.prim_func
 def tile_dynamic_grouped_gemm(
     A: T.Tensor((GROUP_TOTAL_DYNAMIC, GROUP_K), "float32"),
-    B: T.Tensor((GROUP_COUNT_DYNAMIC, GROUP_K, GROUP_N), "float32"),
-    Offsets: T.Tensor((GROUP_COUNT_DYNAMIC,), "int32"),
-    Sizes: T.Tensor((GROUP_COUNT_DYNAMIC,), "int32"),
+    B: T.Tensor((GROUP_COUNT_DYNAMIC_SYM, GROUP_K, GROUP_N), "float32"),
+    Offsets: T.Tensor((GROUP_COUNT_DYNAMIC_SYM,), "int32"),
+    Sizes: T.Tensor((GROUP_COUNT_DYNAMIC_SYM,), "int32"),
     C: T.Tensor((GROUP_TOTAL_DYNAMIC, GROUP_N), "float32"),
 ):
     with T.Kernel(1, threads=1):
-        for group_idx in T.serial(GROUP_COUNT_DYNAMIC):
+        for group_idx in T.serial(GROUP_COUNT_DYNAMIC_SYM):
             A_group = T.match_buffer(
                 A[Offsets[group_idx] : Offsets[group_idx] + Sizes[group_idx], 0:GROUP_K],
                 (Sizes[group_idx], GROUP_K),
@@ -412,7 +413,8 @@ def test_tilelang_compile_runs_riscv_host_adapter_with_dynamic_grouped_gemm():
     assert "func.func @tile_dynamic_grouped_gemm" in source
     assert "scf.for" in source
     assert source.count("linalg.matmul") == 1
-    assert "memref<3xi32>" in source
+    assert "memref<?x4x5xf32>" in source
+    assert "memref<?xi32>" in source
     torch.testing.assert_close(out, ref)
 
 
