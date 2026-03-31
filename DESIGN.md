@@ -370,13 +370,16 @@ Python DSL
   - `examples/riscv/example_reduce_sum.py`
   - `examples/riscv/example_matmul.py`
   - `examples/riscv/example_rms_norm.py`
+  - `examples/riscv/example_online_softmax.py`
   - 上述 examples 的 `--run-host` 与 `--emit-asm/--emit-object`
   - direct `tilelang.compile(..., target="riscv")` host execution
 - 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
 - 仍然属于后续任务的部分主要是：
   - 将 Tier 1 portable suite 逐步移植成 backend-neutral 的正式验收样例
-  - 当前第一个 Tier 1 portable port `example_rms_norm.py` 已落地，下一批优先级为：
-    - `online_softmax`
+  - 当前已落地的 Tier 1 portable ports:
+    - `example_rms_norm.py`
+    - `example_online_softmax.py`
+  - 下一批优先级为：
     - `topk`
     - `convolution`
     - `dynamic_shape`
@@ -882,6 +885,7 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
   - `examples/riscv/example_reduce_sum.py`
   - `examples/riscv/example_matmul.py`
   - `examples/riscv/example_rms_norm.py`
+  - `examples/riscv/example_online_softmax.py`
 - 当前 examples 支持：
   - `--print-tir`
   - `--emit-mlir`
