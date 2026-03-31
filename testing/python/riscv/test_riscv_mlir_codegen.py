@@ -7,6 +7,9 @@ from tilelang import tvm
 from tilelang.engine.phase import LowerAndLegalizeForRISCV, OptimizeForRISCV
 
 
+GROUP_TOTAL_DYNAMIC = T.dynamic("group_total")
+
+
 def _build_mlir_module(func=None, global_symbol="kernel"):
     if func is None:
         func = tvm.tir.PrimFunc([], tvm.tir.Evaluate(0))
@@ -656,6 +659,50 @@ def test_riscv_codegen_lowers_portable_grouped_gemm():
     assert "func.func @tile_grouped_gemm" in source
     assert source.count("linalg.matmul") == 2
     assert source.count("memref.subview") >= 6
+
+
+def test_riscv_codegen_lowers_dynamic_grouped_gemm():
+    @T.prim_func
+    def tile_dynamic_grouped_gemm(
+        A: T.Tensor((GROUP_TOTAL_DYNAMIC, 4), "float32"),
+        B: T.Tensor((2, 4, 5), "float32"),
+        Splits: T.Tensor((2,), "int32"),
+        C: T.Tensor((GROUP_TOTAL_DYNAMIC, 5), "float32"),
+    ):
+        with T.Kernel(1, threads=1):
+            A0 = T.match_buffer(A[0 : Splits[0], 0:4], (Splits[0], 4), dtype="float32")
+            B0 = T.match_buffer(B[0, 0:4, 0:5], (4, 5), dtype="float32")
+            C0 = T.match_buffer(C[0 : Splits[0], 0:5], (Splits[0], 5), dtype="float32")
+            A0_shared = T.alloc_shared((Splits[0], 4), "float32")
+            B0_shared = T.alloc_shared((4, 5), "float32")
+            C0_local = T.alloc_fragment((Splits[0], 5), "float32")
+            T.copy(A0, A0_shared)
+            T.copy(B0, B0_shared)
+            T.clear(C0_local)
+            T.gemm(A0_shared, B0_shared, C0_local)
+            T.copy(C0_local, C0)
+
+            A1 = T.match_buffer(A[Splits[0] : Splits[0] + Splits[1], 0:4], (Splits[1], 4), dtype="float32")
+            B1 = T.match_buffer(B[1, 0:4, 0:5], (4, 5), dtype="float32")
+            C1 = T.match_buffer(C[Splits[0] : Splits[0] + Splits[1], 0:5], (Splits[1], 5), dtype="float32")
+            A1_shared = T.alloc_shared((Splits[1], 4), "float32")
+            B1_shared = T.alloc_shared((4, 5), "float32")
+            C1_local = T.alloc_fragment((Splits[1], 5), "float32")
+            T.copy(A1, A1_shared)
+            T.copy(B1, B1_shared)
+            T.clear(C1_local)
+            T.gemm(A1_shared, B1_shared, C1_local)
+            T.copy(C1_local, C1)
+
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_tilelang_prim(tile_dynamic_grouped_gemm, "tile_dynamic_grouped_gemm")
+    )
+
+    assert "func.func @tile_dynamic_grouped_gemm" in source
+    assert source.count("linalg.matmul") == 2
+    assert "memref<?x4xf32>" in source
+    assert "memref<2xi32>" in source
+    assert source.count("memref.load") >= 2
 
 
 def test_riscv_codegen_lowers_tilelang_gemm_transpose_b():

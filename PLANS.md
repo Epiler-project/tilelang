@@ -335,6 +335,7 @@ Recommended commit slicing:
     - `examples/riscv/example_batched_gemm.py`
     - `examples/riscv/example_gemv.py`
     - `examples/riscv/example_grouped_gemm.py`
+    - `examples/riscv/example_dynamic_grouped_gemm.py`
     - `examples/riscv/example_dynamic_shape.py`
     - `examples/riscv/example_rms_norm.py`
     - `examples/riscv/example_online_softmax.py`
@@ -365,7 +366,7 @@ Recommended commit slicing:
     - additive expression reductions with identity + output-broadcast inputs
   - broader `linalg.generic` / `linalg.reduce` coverage beyond the current simple cases
   - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched case
-  - fully dynamic grouped-gemm dispatch beyond the current compile-time fixed group slices
+  - fully dynamic grouped-gemm dispatch beyond the current split-tensor two-group form
   - broader qemu/spike validation beyond the current smoke path
   - validation environment for qemu/spike is currently absent on this machine (`qemu-riscv64`, `spike`, `pk` not found in `PATH`)
   - local `pytest testing/python/riscv -q` also requires a built TileLang/TVM Python environment with `tvm_ffi` importable
@@ -662,6 +663,7 @@ Run a curated set of backend-neutral examples end to end.
     - host/artifact coverage for `example_batched_gemm.py`
     - host/artifact coverage for `example_gemv.py`
     - host/artifact coverage for `example_grouped_gemm.py`
+    - host/artifact coverage for `example_dynamic_grouped_gemm.py`
     - `tilelang.compile(..., target="riscv")` dynamic-shape host execution
     - `tilelang.compile(..., target="riscv")` reduce-max host execution
     - `tilelang.compile(..., target="riscv")` reduction-expression generic host execution
@@ -669,8 +671,9 @@ Run a curated set of backend-neutral examples end to end.
     - `tilelang.compile(..., target="riscv")` rank-reduced batched GEMM host execution
     - `tilelang.compile(..., target="riscv")` singleton-dim GEMV host execution
     - `tilelang.compile(..., target="riscv")` compile-time grouped GEMM host execution
+    - `tilelang.compile(..., target="riscv")` dynamic grouped GEMM host execution
     - full `testing/python/riscv` regression currently passes on this machine:
-      `76 passed, 1 skipped`
+      `80 passed, 1 skipped`
   - dynamic-shape lowering status:
     - buffer shape vars are rebound from function memrefs via `memref.dim`
     - symbolic compact row-major strides remain accepted in the JIT path
@@ -708,6 +711,7 @@ Run a curated set of backend-neutral examples end to end.
 - batched gemm example runs on local host
 - gemv example runs on local host
 - grouped gemm example runs on local host
+- dynamic grouped gemm example runs on local host
 - each example has a reference NumPy or Torch correctness check
 - each example can emit RISC-V `.s` and `.o`
 
@@ -953,6 +957,8 @@ Treat the original examples in three tiers:
       GEMV port
     - `examples/riscv/example_grouped_gemm.py` now validates compile-time fixed grouped GEMM as a
       backend-neutral Tier 2 port
+    - `examples/riscv/example_dynamic_grouped_gemm.py` now validates split-tensor-driven dynamic
+      grouped GEMM as a backend-neutral Tier 2 port
   - current status:
     - the Tier 1 portable completeness suite is covered in the current backend-neutral plan
   - `examples/elementwise/example_elementwise_add.py` and `examples/gemm/example_gemm.py`
@@ -964,6 +970,7 @@ Treat the original examples in three tiers:
   - current landed backend-neutral coverage:
     - `examples/riscv/example_gemv.py`
     - `examples/riscv/example_grouped_gemm.py`
+    - `examples/riscv/example_dynamic_grouped_gemm.py`
   - selected sparse/grouped kernels after normalization
 - Tier 3: explicit non-goals for the current backend
   - `examples/warp_specialize/`

@@ -18,6 +18,7 @@ GROUP_SIZES_GROUPED_GEMM = (2, 3)
 GROUP_TOTAL_GROUPED_GEMM = sum(GROUP_SIZES_GROUPED_GEMM)
 GROUP_K = 4
 GROUP_N = 5
+GROUP_TOTAL_DYNAMIC = T.dynamic("group_total_dynamic")
 
 
 @T.prim_func
@@ -352,6 +353,66 @@ def test_tilelang_compile_runs_riscv_host_adapter_with_grouped_gemm():
     assert "func.func @tile_grouped_gemm_portable" in source
     assert source.count("linalg.matmul") == len(GROUP_SIZES_GROUPED_GEMM)
     assert "memref.subview" in source
+    torch.testing.assert_close(out, ref)
+
+
+@T.prim_func
+def tile_dynamic_grouped_gemm(
+    A: T.Tensor((GROUP_TOTAL_DYNAMIC, GROUP_K), "float32"),
+    B: T.Tensor((2, GROUP_K, GROUP_N), "float32"),
+    Splits: T.Tensor((2,), "int32"),
+    C: T.Tensor((GROUP_TOTAL_DYNAMIC, GROUP_N), "float32"),
+):
+    with T.Kernel(1, threads=1):
+        A0 = T.match_buffer(A[0 : Splits[0], 0:GROUP_K], (Splits[0], GROUP_K), dtype="float32")
+        B0 = T.match_buffer(B[0, 0:GROUP_K, 0:GROUP_N], (GROUP_K, GROUP_N), dtype="float32")
+        C0 = T.match_buffer(C[0 : Splits[0], 0:GROUP_N], (Splits[0], GROUP_N), dtype="float32")
+        A0_shared = T.alloc_shared((Splits[0], GROUP_K), "float32")
+        B0_shared = T.alloc_shared((GROUP_K, GROUP_N), "float32")
+        C0_local = T.alloc_fragment((Splits[0], GROUP_N), "float32")
+        T.copy(A0, A0_shared)
+        T.copy(B0, B0_shared)
+        T.clear(C0_local)
+        T.gemm(A0_shared, B0_shared, C0_local)
+        T.copy(C0_local, C0)
+
+        A1 = T.match_buffer(
+            A[Splits[0] : Splits[0] + Splits[1], 0:GROUP_K],
+            (Splits[1], GROUP_K),
+            dtype="float32",
+        )
+        B1 = T.match_buffer(B[1, 0:GROUP_K, 0:GROUP_N], (GROUP_K, GROUP_N), dtype="float32")
+        C1 = T.match_buffer(
+            C[Splits[0] : Splits[0] + Splits[1], 0:GROUP_N],
+            (Splits[1], GROUP_N),
+            dtype="float32",
+        )
+        A1_shared = T.alloc_shared((Splits[1], GROUP_K), "float32")
+        B1_shared = T.alloc_shared((GROUP_K, GROUP_N), "float32")
+        C1_local = T.alloc_fragment((Splits[1], GROUP_N), "float32")
+        T.copy(A1, A1_shared)
+        T.copy(B1, B1_shared)
+        T.clear(C1_local)
+        T.gemm(A1_shared, B1_shared, C1_local)
+        T.copy(C1_local, C1)
+
+
+def test_tilelang_compile_runs_riscv_host_adapter_with_dynamic_grouped_gemm():
+    kernel = tilelang.compile(tile_dynamic_grouped_gemm, out_idx=[3], target="riscv")
+
+    lhs = torch.arange(20, dtype=torch.float32).reshape(5, 4)
+    rhs = torch.arange(40, dtype=torch.float32).reshape(2, 4, 5)
+    splits = torch.tensor([2, 3], dtype=torch.int32)
+    out = kernel(lhs, rhs, splits)
+
+    ref = torch.cat((lhs[: splits[0].item()] @ rhs[0], lhs[splits[0].item() :] @ rhs[1]), dim=0)
+
+    source = kernel.get_kernel_source()
+    kernel.close()
+
+    assert "func.func @tile_dynamic_grouped_gemm" in source
+    assert source.count("linalg.matmul") == 2
+    assert "memref<2xi32>" in source
     torch.testing.assert_close(out, ref)
 
 
