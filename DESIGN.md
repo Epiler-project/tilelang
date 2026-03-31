@@ -243,7 +243,8 @@ Python DSL
   - `tl.tileop.copy -> memref.copy` or `scf + memref.load/store` fallback
   - `tl.tileop.fill -> scf + memref.store` fallback
   - `tl.tileop.gemm_py -> linalg.matmul` / `linalg.matmul_transpose_a` /
-    `linalg.matmul_transpose_b` for static 2D single-transpose matmul
+    `linalg.matmul_transpose_b` for static 2D matmul, including double-transpose via
+    temporary transpose materialization
   - `BufferLoad/BufferStore -> memref.load/store`
   - simple reduction init block 通过 `LowerInitBlock` 降成 `scf.if` fallback
   - 常量、`Cast`、`Add/Sub/Mul/Div`、比较、`Select`
@@ -285,6 +286,7 @@ Python DSL
   - TileLang `T.gemm -> linalg.matmul` kernel shell
   - TileLang `T.gemm(..., transpose_A=True)`
   - TileLang `T.gemm(..., transpose_B=True)`
+  - TileLang `T.gemm(..., transpose_A=True, transpose_B=True)`
   - `.mlir/.ll/.s/.o` artifact export
   - x86 host shared-library build and copy-kernel correctness
   - `examples/riscv/example_vector_add.py`
@@ -297,7 +299,7 @@ Python DSL
   - 更完整的 region / subview 组合与 rank-reduction 场景
   - 更直接的 reduction 识别，而不是只依赖 `LowerInitBlock + scf` fallback
   - `linalg.generic`、`linalg.reduce`
-  - simultaneously-transposed / batched / mixed-shape `tl.gemm`
+  - batched / mixed-shape `tl.gemm`
   - qemu / spike / rv64 smoke runner
   - `--run-qemu` 背后的真实执行器
   - 当前机器缺少 `qemu-riscv64` / `spike` / `pk`，因此真实 RISC-V runner 还缺运行环境验证

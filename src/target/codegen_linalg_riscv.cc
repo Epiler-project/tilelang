@@ -486,6 +486,38 @@ private:
     return builder_.create<mlir::memref::AllocaOp>(loc_, memref_type, dynamic_sizes);
   }
 
+  mlir::Value CreateStaticAlloca(llvm::ArrayRef<int64_t> shape, DataType element_dtype) {
+    mlir::MemRefType memref_type = mlir::MemRefType::get(shape, LowerScalarType(element_dtype));
+    return builder_.create<mlir::memref::AllocaOp>(loc_, memref_type);
+  }
+
+  mlir::Value MaterializeTranspose2D(mlir::Value source, int64_t rows, int64_t cols,
+                                     DataType element_dtype) {
+    mlir::Value transposed = CreateStaticAlloca({cols, rows}, element_dtype);
+    mlir::Value zero = ZeroIndex();
+    mlir::Value one = ConstantIntLike(1, builder_.getIndexType());
+    mlir::Value row_upper = ConstantIntLike(rows, builder_.getIndexType());
+    mlir::Value col_upper = ConstantIntLike(cols, builder_.getIndexType());
+
+    mlir::scf::ForOp row_loop = builder_.create<mlir::scf::ForOp>(loc_, zero, row_upper, one);
+    {
+      mlir::OpBuilder::InsertionGuard row_guard(builder_);
+      builder_.setInsertionPoint(row_loop.getBody()->getTerminator());
+      mlir::Value row_iv = row_loop.getInductionVar();
+
+      mlir::scf::ForOp col_loop = builder_.create<mlir::scf::ForOp>(loc_, zero, col_upper, one);
+      mlir::OpBuilder::InsertionGuard col_guard(builder_);
+      builder_.setInsertionPoint(col_loop.getBody()->getTerminator());
+      mlir::Value col_iv = col_loop.getInductionVar();
+
+      mlir::Value value = builder_.create<mlir::memref::LoadOp>(loc_, source,
+                                                                llvm::SmallVector<mlir::Value, 2>{row_iv, col_iv});
+      builder_.create<mlir::memref::StoreOp>(loc_, value, transposed,
+                                             llvm::SmallVector<mlir::Value, 2>{col_iv, row_iv});
+    }
+    return transposed;
+  }
+
   template <typename F>
   void EmitConditionalRegion(const PrimExpr& predicate, F&& body_builder) {
     if (tir::is_one(predicate)) {
@@ -628,9 +660,6 @@ private:
     int64_t k = GetStaticInt(op->args[7], "tl.gemm K");
     bool clear_accum = GetStaticBool(op->args[9], "tl.gemm clear_accum");
 
-    ICHECK(!(transpose_a && transpose_b))
-        << "Simultaneously transposed-A and transposed-B tl.gemm is not supported yet in "
-           "linalg_riscv lowering";
     ICHECK_EQ(a_region->region.size(), 2) << "Only 2D tl.gemm A operands are supported";
     ICHECK_EQ(b_region->region.size(), 2) << "Only 2D tl.gemm B operands are supported";
     ICHECK_EQ(c_region->region.size(), 2) << "Only 2D tl.gemm C operands are supported";
@@ -659,6 +688,13 @@ private:
     mlir::Value a_view = CreateSubview(a_region);
     mlir::Value b_view = CreateSubview(b_region);
     mlir::Value c_view = CreateSubview(c_region);
+    if (transpose_a && transpose_b) {
+      mlir::Value a_materialized = MaterializeTranspose2D(a_view, k, m, a_region->buffer->dtype);
+      builder_.create<mlir::linalg::MatmulTransposeBOp>(loc_,
+                                                        mlir::ValueRange{a_materialized, b_view},
+                                                        mlir::ValueRange{c_view});
+      return;
+    }
     if (transpose_a) {
       builder_.create<mlir::linalg::MatmulTransposeAOp>(loc_, mlir::ValueRange{a_view, b_view},
                                                         mlir::ValueRange{c_view});

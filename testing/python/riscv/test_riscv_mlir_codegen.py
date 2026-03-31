@@ -321,3 +321,30 @@ def test_riscv_codegen_lowers_tilelang_gemm_transpose_a():
     assert "linalg.matmul_transpose_a" in source
     assert "memref<3x2xf32>" in source
     assert "memref<3x4xf32>" in source
+
+
+def test_riscv_codegen_lowers_tilelang_gemm_transpose_a_and_b():
+    @T.prim_func
+    def tile_matmul_transpose_ab(
+        A: T.Tensor((3, 2), "float32"),
+        B: T.Tensor((4, 3), "float32"),
+        C: T.Tensor((2, 4), "float32"),
+    ):
+        with T.Kernel(1, threads=1):
+            A_shared = T.alloc_shared((3, 2), "float32")
+            B_shared = T.alloc_shared((4, 3), "float32")
+            C_local = T.alloc_fragment((2, 4), "float32")
+            T.clear(C_local)
+            T.copy(A, A_shared)
+            T.copy(B, B_shared)
+            T.gemm(A_shared, B_shared, C_local, transpose_A=True, transpose_B=True)
+            T.copy(C_local, C)
+
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_tilelang_prim(tile_matmul_transpose_ab, "tile_matmul_transpose_ab")
+    )
+
+    assert "func.func @tile_matmul_transpose_ab" in source
+    assert "linalg.matmul_transpose_b" in source
+    assert source.count("scf.for") >= 2
+    assert source.count("memref.store") >= 1

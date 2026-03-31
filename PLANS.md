@@ -249,7 +249,8 @@ Recommended commit slicing:
     - `tl.tileop.copy -> memref.copy` or `scf + memref.load/store` fallback
     - `tl.tileop.fill -> scf + memref.store` fallback
     - `tl.tileop.gemm_py -> linalg.matmul` / `linalg.matmul_transpose_a` /
-      `linalg.matmul_transpose_b` for static 2D single-transpose matmul
+      `linalg.matmul_transpose_b` for static 2D matmul, including double-transpose via
+      temporary transpose materialization
     - `BufferLoad/BufferStore -> memref.load/store`
     - simple reduction init fallback via `tir.transform.LowerInitBlock`
     - constants, casts, arithmetic, comparisons, `Select`
@@ -267,6 +268,7 @@ Recommended commit slicing:
     - TileLang `T.gemm -> linalg.matmul` kernel shell
     - TileLang `T.gemm(..., transpose_A=True)`
     - TileLang `T.gemm(..., transpose_B=True)`
+    - TileLang `T.gemm(..., transpose_A=True, transpose_B=True)`
 - Phase 2 artifact/export + host-sim surface is partially landed:
   - `tilelang/jit/adapter/riscv/libgen.py` currently exports:
     - `emit_mlir()`
@@ -321,7 +323,7 @@ Recommended commit slicing:
   - broader region / subview / slice lowering beyond the simple contiguous case
   - native reduction recognition beyond `LowerInitBlock + scf` fallback
   - `linalg.generic` / `linalg.reduce`
-  - simultaneously-transposed / batched / mixed-shape `tl.gemm`
+  - batched / mixed-shape `tl.gemm`
   - real qemu/spike runner wiring behind `--run-qemu`
   - validation environment for qemu/spike is currently absent on this machine (`qemu-riscv64`, `spike`, `pk` not found in `PATH`)
 
