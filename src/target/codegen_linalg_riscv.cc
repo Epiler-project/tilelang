@@ -17,6 +17,7 @@
 #include <llvm/Support/raw_ostream.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/Linalg/IR/Linalg.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/BuiltinOps.h>
@@ -64,10 +65,12 @@ public:
         loc_(builder_.getUnknownLoc()),
         module_(mlir::ModuleOp::create(loc_)) {
     registry_.insert<mlir::arith::ArithDialect, mlir::func::FuncDialect,
-                     mlir::memref::MemRefDialect, mlir::scf::SCFDialect>();
+                     mlir::linalg::LinalgDialect, mlir::memref::MemRefDialect,
+                     mlir::scf::SCFDialect>();
     context_.appendDialectRegistry(registry_);
     context_.loadDialect<mlir::arith::ArithDialect, mlir::func::FuncDialect,
-                         mlir::memref::MemRefDialect, mlir::scf::SCFDialect>();
+                         mlir::linalg::LinalgDialect, mlir::memref::MemRefDialect,
+                         mlir::scf::SCFDialect>();
     builder_.setInsertionPointToStart(module_.getBody());
   }
 
@@ -227,6 +230,23 @@ private:
     const auto* lhs_imm = lhs.as<IntImmNode>();
     const auto* rhs_imm = rhs.as<IntImmNode>();
     return lhs_imm != nullptr && rhs_imm != nullptr && lhs_imm->value == rhs_imm->value;
+  }
+
+  int64_t GetStaticInt(const PrimExpr& expr, const char* what) {
+    const auto* imm = expr.as<IntImmNode>();
+    ICHECK(imm != nullptr) << what << " must be a static IntImm in linalg_riscv lowering";
+    return imm->value;
+  }
+
+  bool GetStaticBool(const PrimExpr& expr, const char* what) {
+    if (tir::is_zero(expr)) {
+      return false;
+    }
+    if (tir::is_one(expr)) {
+      return true;
+    }
+    LOG(FATAL) << what << " must be a static boolean in linalg_riscv lowering";
+    TVM_FFI_UNREACHABLE();
   }
 
   bool HasStaticCompactRowMajorLayout(const tir::Buffer& buffer) {
@@ -511,6 +531,14 @@ private:
     return builder_.create<mlir::arith::AddIOp>(loc_, coord, AsIndex(VisitExpr(min), min.dtype()));
   }
 
+  mlir::Value CreateZeroValue(DataType dtype) {
+    if (dtype.is_float()) {
+      mlir::FloatType type = mlir::cast<mlir::FloatType>(LowerScalarType(dtype));
+      return builder_.create<mlir::arith::ConstantOp>(loc_, builder_.getFloatAttr(type, 0.0));
+    }
+    return ConstantIntLike(0, LowerScalarType(dtype));
+  }
+
   llvm::SmallVector<mlir::Value, 4> LowerRegionIndices(
       const tir::BufferRegion& region, llvm::ArrayRef<mlir::Value> coords) {
     ICHECK_EQ(region->region.size(), coords.size());
@@ -534,17 +562,21 @@ private:
     return true;
   }
 
-  void LowerTileFill(const tir::CallNode* op) {
-    tir::BufferRegion dst_region = tl::NormalizeToBufferRegion(op->args[0]);
+  void FillBufferRegion(const tir::BufferRegion& dst_region, mlir::Value fill_value,
+                        DataType source_dtype) {
     const tir::Buffer& dst_buffer = dst_region->buffer;
     mlir::Value dst_memref = LookupBufferValue(dst_buffer);
 
     EmitLoopNest(dst_region->region, [&](llvm::ArrayRef<mlir::Value> coords) {
       llvm::SmallVector<mlir::Value, 4> dst_indices = LowerRegionIndices(dst_region, coords);
-      mlir::Value fill_value = VisitExpr(op->args[1]);
-      fill_value = CastValue(fill_value, op->args[1].dtype(), dst_buffer->dtype);
-      builder_.create<mlir::memref::StoreOp>(loc_, fill_value, dst_memref, dst_indices);
+      mlir::Value value = CastValue(fill_value, source_dtype, dst_buffer->dtype);
+      builder_.create<mlir::memref::StoreOp>(loc_, value, dst_memref, dst_indices);
     });
+  }
+
+  void LowerTileFill(const tir::CallNode* op) {
+    tir::BufferRegion dst_region = tl::NormalizeToBufferRegion(op->args[0]);
+    FillBufferRegion(dst_region, VisitExpr(op->args[1]), op->args[1].dtype());
   }
 
   void LowerTileCopy(const tir::CallNode* op) {
@@ -584,15 +616,58 @@ private:
     });
   }
 
+  void LowerTileGemmPy(const tir::CallNode* op) {
+    tir::BufferRegion a_region = tl::NormalizeToBufferRegion(op->args[0]);
+    tir::BufferRegion b_region = tl::NormalizeToBufferRegion(op->args[1]);
+    tir::BufferRegion c_region = tl::NormalizeToBufferRegion(op->args[2]);
+
+    bool transpose_a = GetStaticBool(op->args[3], "tl.gemm transpose_a");
+    bool transpose_b = GetStaticBool(op->args[4], "tl.gemm transpose_b");
+    int64_t m = GetStaticInt(op->args[5], "tl.gemm M");
+    int64_t n = GetStaticInt(op->args[6], "tl.gemm N");
+    int64_t k = GetStaticInt(op->args[7], "tl.gemm K");
+    bool clear_accum = GetStaticBool(op->args[9], "tl.gemm clear_accum");
+
+    ICHECK(!transpose_a && !transpose_b)
+        << "Only non-transposed tl.gemm is supported in linalg_riscv lowering";
+    ICHECK_EQ(a_region->region.size(), 2) << "Only 2D tl.gemm A operands are supported";
+    ICHECK_EQ(b_region->region.size(), 2) << "Only 2D tl.gemm B operands are supported";
+    ICHECK_EQ(c_region->region.size(), 2) << "Only 2D tl.gemm C operands are supported";
+
+    ICHECK_EQ(GetStaticInt(a_region->region[0]->extent, "tl.gemm A M extent"), m);
+    ICHECK_EQ(GetStaticInt(a_region->region[1]->extent, "tl.gemm A K extent"), k);
+    ICHECK_EQ(GetStaticInt(b_region->region[0]->extent, "tl.gemm B K extent"), k);
+    ICHECK_EQ(GetStaticInt(b_region->region[1]->extent, "tl.gemm B N extent"), n);
+    ICHECK_EQ(GetStaticInt(c_region->region[0]->extent, "tl.gemm C M extent"), m);
+    ICHECK_EQ(GetStaticInt(c_region->region[1]->extent, "tl.gemm C N extent"), n);
+
+    if (clear_accum) {
+      FillBufferRegion(c_region, CreateZeroValue(c_region->buffer->dtype), c_region->buffer->dtype);
+    }
+
+    mlir::Value a_view = CreateSubview(a_region);
+    mlir::Value b_view = CreateSubview(b_region);
+    mlir::Value c_view = CreateSubview(c_region);
+    builder_.create<mlir::linalg::MatmulOp>(loc_, mlir::ValueRange{a_view, b_view},
+                                            mlir::ValueRange{c_view});
+  }
+
   bool LowerStatementLikeCall(const tir::CallNode* op) {
-    static const Op copy_op = Op::Get("tl.tileop.copy");
-    static const Op fill_op = Op::Get("tl.tileop.fill");
-    if (op->op.same_as(copy_op)) {
+    const auto* op_node = op->op.as<OpNode>();
+    if (op_node == nullptr) {
+      return false;
+    }
+
+    if (op_node->name == "tl.tileop.copy") {
       LowerTileCopy(op);
       return true;
     }
-    if (op->op.same_as(fill_op)) {
+    if (op_node->name == "tl.tileop.fill") {
       LowerTileFill(op);
+      return true;
+    }
+    if (op_node->name == "tl.tileop.gemm_py") {
+      LowerTileGemmPy(op);
       return true;
     }
     return false;

@@ -242,6 +242,7 @@ Python DSL
   - simple contiguous `match_buffer -> memref.subview`
   - `tl.tileop.copy -> memref.copy` or `scf + memref.load/store` fallback
   - `tl.tileop.fill -> scf + memref.store` fallback
+  - `tl.tileop.gemm_py -> linalg.matmul` for static 2D non-transposed matmul
   - `BufferLoad/BufferStore -> memref.load/store`
   - simple reduction init block 通过 `LowerInitBlock` 降成 `scf.if` fallback
   - 常量、`Cast`、`Add/Sub/Mul/Div`、比较、`Select`
@@ -255,11 +256,12 @@ Python DSL
   - reduce-sum fallback
   - TileLang `T.copy` kernel shell
   - TileLang `T.clear` / fill kernel shell
+  - TileLang `T.gemm -> linalg.matmul` kernel shell
 - 仍然属于后续任务的部分主要是：
   - 更完整的 region / subview 组合与 rank-reduction 场景
   - 更直接的 reduction 识别，而不是只依赖 `LowerInitBlock + scf` fallback
   - `linalg.generic`、`linalg.reduce`
-  - `tl.gemm -> linalg.matmul`
+  - transposed / batched / mixed-shape `tl.gemm`
 
 
 ## 6. 切入点设计

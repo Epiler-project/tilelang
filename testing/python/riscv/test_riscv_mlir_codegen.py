@@ -242,3 +242,28 @@ def test_riscv_codegen_lowers_tilelang_fill_kernel():
     assert "scf.for" in source
     assert "memref.store" in source
     assert "memref.copy" in source
+
+
+def test_riscv_codegen_lowers_tilelang_gemm_to_linalg_matmul():
+    @T.prim_func
+    def tile_matmul(
+        A: T.Tensor((4, 4), "float32"),
+        B: T.Tensor((4, 4), "float32"),
+        C: T.Tensor((4, 4), "float32"),
+    ):
+        with T.Kernel(1, threads=1):
+            A_shared = T.alloc_shared((4, 4), "float32")
+            B_shared = T.alloc_shared((4, 4), "float32")
+            C_local = T.alloc_fragment((4, 4), "float32")
+            T.clear(C_local)
+            T.copy(A, A_shared)
+            T.copy(B, B_shared)
+            T.gemm(A_shared, B_shared, C_local)
+            T.copy(C_local, C)
+
+    source = _real_mlir_source_or_skip(_build_mlir_from_tilelang_prim(tile_matmul, "tile_matmul"))
+
+    assert "func.func @tile_matmul" in source
+    assert "linalg.matmul" in source
+    assert source.count("memref.copy") >= 3
+    assert "memref.alloca() : memref<4x4xf32>" in source

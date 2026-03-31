@@ -248,6 +248,7 @@ Recommended commit slicing:
     - simple contiguous `match_buffer -> memref.subview`
     - `tl.tileop.copy -> memref.copy` or `scf + memref.load/store` fallback
     - `tl.tileop.fill -> scf + memref.store` fallback
+    - `tl.tileop.gemm_py -> linalg.matmul` for static 2D non-transposed matmul
     - `BufferLoad/BufferStore -> memref.load/store`
     - simple reduction init fallback via `tir.transform.LowerInitBlock`
     - constants, casts, arithmetic, comparisons, `Select`
@@ -262,11 +263,12 @@ Recommended commit slicing:
     - reduce-sum fallback
     - TileLang `T.copy` kernel shell
     - TileLang `T.clear` / fill kernel shell
+    - TileLang `T.gemm -> linalg.matmul` kernel shell
 - next gap has shifted to Phase 2+:
   - broader region / subview / slice lowering beyond the simple contiguous case
   - native reduction recognition beyond `LowerInitBlock + scf` fallback
   - `linalg.generic` / `linalg.reduce`
-  - `tl.gemm -> linalg.matmul`
+  - transposed / batched / mixed-shape `tl.gemm`
 
 ## Phase 0: Freeze Scope And Scaffolding
 
