@@ -290,12 +290,30 @@ Recommended commit slicing:
   - automated coverage currently includes:
     - `.mlir/.ll/.s/.o` export
     - native x86 host shared-library build and NumPy correctness on copy
+- Phase 3 example surface is partially landed:
+  - shared helper:
+    - `examples/riscv/common.py`
+  - runnable examples:
+    - `examples/riscv/example_vector_add.py`
+    - `examples/riscv/example_copy.py`
+    - `examples/riscv/example_reduce_sum.py`
+    - `examples/riscv/example_matmul.py`
+  - current example CLI surface:
+    - `--print-tir`
+    - `--emit-mlir`
+    - `--emit-llvm`
+    - `--emit-asm`
+    - `--emit-object`
+    - `--run-host`
+  - automated coverage currently includes:
+    - each example runs on the local x86 host path
+    - each example emits non-empty RISC-V `.s` and `.o` artifacts
 - next gap has shifted to Phase 2+:
   - broader region / subview / slice lowering beyond the simple contiguous case
   - native reduction recognition beyond `LowerInitBlock + scf` fallback
   - `linalg.generic` / `linalg.reduce`
   - transposed / batched / mixed-shape `tl.gemm`
-  - example set and qemu/spike runner wiring
+  - real qemu/spike runner wiring behind `--run-qemu`
 
 ## Phase 0: Freeze Scope And Scaffolding
 
@@ -543,14 +561,19 @@ Run a few examples end to end.
   - print MLIR
   - export asm
   - optional run
+- current status:
+  - all four examples are landed
+  - local host execution is wired and tested
+  - `--run-qemu` is still a reserved stub until the qemu/spike runner lands
 
 ### Acceptance
 
-- vector add example runs
-- copy example runs
-- reduce sum example runs
-- matmul example runs
+- vector add example runs on local host
+- copy example runs on local host
+- reduce sum example runs on local host
+- matmul example runs on local host
 - each example has a reference NumPy or Torch correctness check
+- each example can emit RISC-V `.s` and `.o`
 
 ## Phase 6: RVV Optimization
 
@@ -681,6 +704,9 @@ Create a new directory `testing/python/riscv`.
   - `.mlir`, `.ll`, `.s`, `.o` are produced
   - export paths are deterministic
   - native x86 host simulation can run a copy kernel
+- `test_riscv_examples.py`
+  - the example CLIs run on host
+  - the example CLIs emit RISC-V asm/object artifacts
 
 ### Level 3: optional runtime
 
@@ -808,6 +834,10 @@ python examples/riscv/example_matmul.py --emit-mlir
 
 python examples/riscv/example_vector_add.py --emit-asm
 python examples/riscv/example_matmul.py --emit-asm
+python examples/riscv/example_vector_add.py --run-host
+python examples/riscv/example_copy.py --run-host
+python examples/riscv/example_reduce_sum.py --run-host
+python examples/riscv/example_matmul.py --run-host
 ```
 
 Optional runtime validation:

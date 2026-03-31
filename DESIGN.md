@@ -281,13 +281,18 @@ Python DSL
   - TileLang `T.gemm -> linalg.matmul` kernel shell
   - `.mlir/.ll/.s/.o` artifact export
   - x86 host shared-library build and copy-kernel correctness
+  - `examples/riscv/example_vector_add.py`
+  - `examples/riscv/example_copy.py`
+  - `examples/riscv/example_reduce_sum.py`
+  - `examples/riscv/example_matmul.py`
+  - 上述 examples 的 `--run-host` 与 `--emit-asm/--emit-object`
 - 仍然属于后续任务的部分主要是：
   - 更完整的 region / subview 组合与 rank-reduction 场景
   - 更直接的 reduction 识别，而不是只依赖 `LowerInitBlock + scf` fallback
   - `linalg.generic`、`linalg.reduce`
   - transposed / batched / mixed-shape `tl.gemm`
   - qemu / spike / rv64 smoke runner
-  - 示例集与 CLI 约定的完整落地
+  - `--run-qemu` 背后的真实执行器
 
 
 ## 6. 切入点设计
@@ -759,6 +764,26 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
 
 - host 模拟
 - qemu / spike / rv64 仿真
+
+当前阶段补充：
+
+- x86 host 验证已经不是手工探针，而是仓库内正式能力：
+  - `tilelang/jit/adapter/riscv/wrapper.py`
+  - `tilelang/jit/adapter/riscv/adapter.py`
+- 示例入口已经补齐到：
+  - `examples/riscv/common.py`
+  - `examples/riscv/example_vector_add.py`
+  - `examples/riscv/example_copy.py`
+  - `examples/riscv/example_reduce_sum.py`
+  - `examples/riscv/example_matmul.py`
+- 当前 examples 支持：
+  - `--print-tir`
+  - `--emit-mlir`
+  - `--emit-llvm`
+  - `--emit-asm`
+  - `--emit-object`
+  - `--run-host`
+- `--run-qemu` 仍然保留为下一阶段工作
 
 ### 阶段 4：性能优化
 
