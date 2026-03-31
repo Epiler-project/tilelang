@@ -1466,6 +1466,12 @@ private:
           << "tl.copy rank-reduced extents must match";
     }
 
+    if (src_buffer->dtype == dst_buffer->dtype) {
+      builder_.create<mlir::memref::CopyOp>(loc_, CreateLogicalSubview(src_region),
+                                            CreateLogicalSubview(dst_region));
+      return;
+    }
+
     EmitLoopNest(LogicalRegion(dst_region->region), [&](llvm::ArrayRef<mlir::Value> coords) {
       llvm::SmallVector<mlir::Value, 4> src_indices = LowerLogicalRegionIndices(src_region, coords);
       llvm::SmallVector<mlir::Value, 4> dst_indices = LowerLogicalRegionIndices(dst_region, coords);

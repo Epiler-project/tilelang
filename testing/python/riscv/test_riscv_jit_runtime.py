@@ -486,3 +486,31 @@ def test_tilelang_compile_runs_riscv_host_adapter_with_dynamic_batched_tile_gemm
     assert "memref.subview" in source
     assert source.count("linalg.matmul") == 1
     torch.testing.assert_close(out, torch.matmul(lhs, rhs))
+
+
+@T.prim_func
+def tile_dynamic_rank_reduced_copy(
+    A: T.Tensor((BATCH_DYNAMIC, 4, 1), "float32"),
+    B: T.Tensor((BATCH_DYNAMIC, 4), "float32"),
+):
+    with T.Kernel(1, threads=1):
+        A_shared = T.alloc_shared((BATCH_DYNAMIC, 4, 1), "float32")
+        T.copy(A, A_shared)
+        for b in T.serial(BATCH_DYNAMIC):
+            T.copy(A_shared[b, :, :], B[b, :])
+
+
+def test_tilelang_compile_runs_riscv_host_adapter_with_dynamic_rank_reduced_copy():
+    func = tile_dynamic_rank_reduced_copy.with_attr("global_symbol", "tile_dynamic_rank_reduced_copy_runtime")
+    kernel = tilelang.compile(func, out_idx=[1], target="riscv")
+
+    data = torch.arange(12, dtype=torch.float32).reshape(3, 4, 1)
+    out = kernel(data)
+
+    source = kernel.get_kernel_source()
+    kernel.close()
+
+    assert "func.func @tile_dynamic_rank_reduced_copy_runtime" in source
+    assert "memref.subview" in source
+    assert "memref.copy" in source
+    torch.testing.assert_close(out, data.squeeze(-1))

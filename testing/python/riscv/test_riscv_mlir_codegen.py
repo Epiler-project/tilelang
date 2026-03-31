@@ -636,6 +636,50 @@ def test_riscv_codegen_lowers_dynamic_rank_reduced_tilelang_gemm_slices():
     assert "scf.for" in source
 
 
+def test_riscv_codegen_lowers_rank_reduced_tilelang_copy_to_memref_copy():
+    @T.prim_func
+    def tile_rank_reduced_copy(
+        A: T.Tensor((2, 4, 1), "float32"),
+        B: T.Tensor((2, 4), "float32"),
+    ):
+        with T.Kernel(1, threads=1):
+            A_shared = T.alloc_shared((2, 4, 1), "float32")
+            T.copy(A, A_shared)
+            for b in T.serial(2):
+                T.copy(A_shared[b, :, :], B[b, :])
+
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_tilelang_prim(tile_rank_reduced_copy, "tile_rank_reduced_copy")
+    )
+
+    assert "func.func @tile_rank_reduced_copy(%arg0: memref<2x4x1xf32>, %arg1: memref<2x4xf32>)" in source
+    assert "memref.subview" in source
+    assert "memref.copy" in source
+    assert "scf.for" in source
+
+
+def test_riscv_codegen_lowers_dynamic_rank_reduced_tilelang_copy_to_memref_copy():
+    @T.prim_func
+    def tile_dynamic_rank_reduced_copy(
+        A: T.Tensor((BATCH_DYNAMIC, 4, 1), "float32"),
+        B: T.Tensor((BATCH_DYNAMIC, 4), "float32"),
+    ):
+        with T.Kernel(1, threads=1):
+            A_shared = T.alloc_shared((BATCH_DYNAMIC, 4, 1), "float32")
+            T.copy(A, A_shared)
+            for b in T.serial(BATCH_DYNAMIC):
+                T.copy(A_shared[b, :, :], B[b, :])
+
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_tilelang_prim(tile_dynamic_rank_reduced_copy, "tile_dynamic_rank_reduced_copy")
+    )
+
+    assert "func.func @tile_dynamic_rank_reduced_copy(%arg0: memref<?x4x1xf32>, %arg1: memref<?x4xf32>)" in source
+    assert "memref.subview" in source
+    assert "memref.copy" in source
+    assert "scf.for" in source
+
+
 def test_riscv_codegen_lowers_tilelang_gemv_via_singleton_dim_gemm():
     @T.prim_func
     def tile_gemv(

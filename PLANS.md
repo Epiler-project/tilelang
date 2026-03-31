@@ -670,8 +670,9 @@ Run a curated set of backend-neutral examples end to end.
     - `tilelang.compile(..., target="riscv")` singleton-dim GEMV host execution
     - `tilelang.compile(..., target="riscv")` compile-time grouped GEMM host execution
     - `tilelang.compile(..., target="riscv")` dynamic grouped GEMM host execution
+    - `tilelang.compile(..., target="riscv")` dynamic rank-reduced copy host execution
     - full `testing/python/riscv` regression currently passes on this machine:
-      `84 passed, 1 skipped`
+      `87 passed, 1 skipped`
   - dynamic grouped GEMM lowering status:
     - runtime dynamic `group_count` plus `Offsets` / `Sizes` now lower as a single
       `scf.for`-driven grouped dispatch
@@ -695,8 +696,9 @@ Run a curated set of backend-neutral examples end to end.
       `example_online_softmax.py` are covered by the same structured path
   - rank-reduced slice lowering status:
     - static-1 dimensions can now be dropped through rank-reduced `memref.subview`
-    - `tl.copy` supports logical-shape-compatible copies when source/destination only differ by
-      static-1 dims
+    - same-dtype `tl.copy` now lowers logical-shape-compatible rank-reduced slices via logical
+      `memref.subview + memref.copy`
+    - mixed-dtype `tl.copy` still falls back to the explicit `scf + memref.load/store` path
     - `tl.gemm` accepts logical 2D operands sliced from higher-rank buffers
     - symbolic batch-count batched slices now lower through the same rank-reduced GEMM path
     - explicit singleton-dim operands such as `(K, 1)` are preserved for GEMV-style
