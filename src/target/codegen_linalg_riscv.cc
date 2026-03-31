@@ -19,6 +19,7 @@
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/Linalg/IR/Linalg.h>
+#include <mlir/Dialect/Math/IR/Math.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/BuiltinOps.h>
@@ -58,6 +59,37 @@ std::string BuildPlaceholderModule(const std::vector<FunctionEntry>& functions) 
 }
 
 #if TILELANG_ENABLE_LINALG_RISCV_MLIR
+bool IsSupportedUnaryMathCall(const tir::CallNode* op) {
+  const auto* op_node = op->op.as<OpNode>();
+  if (op_node == nullptr || op->args.size() != 1 || !op->dtype.is_float()) {
+    return false;
+  }
+  return op_node->name == "tir.sqrt" || op_node->name == "tir.rsqrt" ||
+         op_node->name == "tir.exp2" || op_node->name == "tir.log2";
+}
+
+mlir::Value LowerSupportedUnaryMathCall(mlir::OpBuilder& builder, mlir::Location loc,
+                                        const tir::CallNode* op, mlir::Value arg) {
+  ICHECK(IsSupportedUnaryMathCall(op))
+      << "Unsupported TIR call in linalg_riscv lowering: " << op->op;
+  const auto* op_node = op->op.as<OpNode>();
+  ICHECK(op_node != nullptr);
+  if (op_node->name == "tir.sqrt") {
+    return builder.create<mlir::math::SqrtOp>(loc, arg);
+  }
+  if (op_node->name == "tir.rsqrt") {
+    return builder.create<mlir::math::RsqrtOp>(loc, arg);
+  }
+  if (op_node->name == "tir.exp2") {
+    return builder.create<mlir::math::Exp2Op>(loc, arg);
+  }
+  if (op_node->name == "tir.log2") {
+    return builder.create<mlir::math::Log2Op>(loc, arg);
+  }
+  LOG(FATAL) << "Unsupported TIR math call in linalg_riscv lowering: " << op_node->name;
+  TVM_FFI_UNREACHABLE();
+}
+
 class TIRToMLIRLowerer final : private tir::StmtFunctor<void(const tir::Stmt&)>,
                                private tir::ExprFunctor<mlir::Value(const PrimExpr&)> {
 public:
@@ -67,12 +99,12 @@ public:
         loc_(builder_.getUnknownLoc()),
         module_(mlir::ModuleOp::create(loc_)) {
     registry_.insert<mlir::arith::ArithDialect, mlir::func::FuncDialect,
-                     mlir::linalg::LinalgDialect, mlir::memref::MemRefDialect,
-                     mlir::scf::SCFDialect>();
+                     mlir::linalg::LinalgDialect, mlir::math::MathDialect,
+                     mlir::memref::MemRefDialect, mlir::scf::SCFDialect>();
     context_.appendDialectRegistry(registry_);
     context_.loadDialect<mlir::arith::ArithDialect, mlir::func::FuncDialect,
-                         mlir::linalg::LinalgDialect, mlir::memref::MemRefDialect,
-                         mlir::scf::SCFDialect>();
+                         mlir::linalg::LinalgDialect, mlir::math::MathDialect,
+                         mlir::memref::MemRefDialect, mlir::scf::SCFDialect>();
     builder_.setInsertionPointToStart(module_.getBody());
   }
 
@@ -204,8 +236,10 @@ private:
       return true;
     }
     bool VisitExpr_(const tir::CallNode* op) final {
-      (void)op;
-      return false;
+      if (!IsSupportedUnaryMathCall(op)) {
+        return false;
+      }
+      return VisitExpr(op->args[0]);
     }
     bool VisitExprDefault_(const Object* op) final {
       (void)op;
@@ -376,6 +410,13 @@ private:
     mlir::Value VisitExpr_(const tir::CastNode* op) final {
       mlir::Value value = VisitExpr(op->value);
       return outer_->CastValue(value, op->value.dtype(), op->dtype);
+    }
+
+    mlir::Value VisitExpr_(const tir::CallNode* op) final {
+      ICHECK(IsSupportedUnaryMathCall(op))
+          << "Unsupported TIR call in elementwise linalg.generic lowering: " << op->op;
+      mlir::Value arg = outer_->CastValue(VisitExpr(op->args[0]), op->args[0].dtype(), op->dtype);
+      return LowerSupportedUnaryMathCall(outer_->builder_, outer_->loc_, op, arg);
     }
 
     mlir::Value VisitExpr_(const tir::EQNode* op) final {
@@ -1932,6 +1973,13 @@ private:
   mlir::Value VisitExpr_(const FloatImmNode* op) final {
     mlir::FloatType type = mlir::cast<mlir::FloatType>(LowerScalarType(op->dtype));
     return builder_.create<mlir::arith::ConstantOp>(loc_, builder_.getFloatAttr(type, op->value));
+  }
+
+  mlir::Value VisitExpr_(const tir::CallNode* op) final {
+    ICHECK(IsSupportedUnaryMathCall(op))
+        << "Unsupported TIR expr for linalg_riscv MLIR lowering: " << op->op;
+    mlir::Value arg = CastValue(VisitExpr(op->args[0]), op->args[0].dtype(), op->dtype);
+    return LowerSupportedUnaryMathCall(builder_, loc_, op, arg);
   }
 
   mlir::Value VisitExprDefault_(const Object* op) final {

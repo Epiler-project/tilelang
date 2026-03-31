@@ -202,6 +202,47 @@ def saxpy(A: T.Buffer((4,), "float32"), B: T.Buffer((4,), "float32"), alpha: T.f
     assert "arith.addf" in source
 
 
+def test_riscv_codegen_lowers_unary_math_calls():
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_source(
+            """
+# from tvm.script import tir as T
+@T.prim_func
+def unary_math(
+    A: T.Buffer((4,), "float32"),
+    B: T.Buffer((4,), "float32"),
+    C: T.Buffer((4,), "float32"),
+    D: T.Buffer((4,), "float32"),
+    E: T.Buffer((4,), "float32"),
+):
+    for i in T.serial(4):
+        with T.block("sqrt"):
+            vi = T.axis.spatial(4, i)
+            B[vi] = T.sqrt(A[vi])
+    for i in T.serial(4):
+        with T.block("rsqrt"):
+            vi = T.axis.spatial(4, i)
+            C[vi] = T.rsqrt(A[vi])
+    for i in T.serial(4):
+        with T.block("exp2"):
+            vi = T.axis.spatial(4, i)
+            D[vi] = T.exp2(A[vi])
+    for i in T.serial(4):
+        with T.block("log2"):
+            vi = T.axis.spatial(4, i)
+            E[vi] = T.log2(A[vi])
+""",
+            "unary_math",
+        )
+    )
+
+    assert "func.func @unary_math" in source
+    assert "math.sqrt" in source
+    assert "math.rsqrt" in source
+    assert "math.exp2" in source
+    assert "math.log2" in source
+
+
 def test_riscv_codegen_lowers_if_then_else():
     source = _real_mlir_source_or_skip(
         _build_mlir_from_source(

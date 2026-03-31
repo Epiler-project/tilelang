@@ -18,6 +18,7 @@ EXAMPLES = (
     "example_copy.py",
     "example_reduce_sum.py",
     "example_matmul.py",
+    "example_rms_norm.py",
 )
 
 

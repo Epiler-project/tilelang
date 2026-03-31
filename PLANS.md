@@ -588,7 +588,6 @@ Run a curated set of backend-neutral examples end to end.
   - `examples/riscv/example_reduce_sum.py`
   - `examples/riscv/example_matmul.py`
 - define the next portable expansion set from original `examples/`:
-  - `examples/norm/rms_norm.py`
   - `examples/online_softmax/online_softmax.py`
   - `examples/topk/example_topk.py`
   - `examples/convolution/example_convolution.py`
@@ -600,6 +599,8 @@ Run a curated set of backend-neutral examples end to end.
   - optional run
 - current status:
   - all four examples are landed
+  - the first Tier 1 portable port is landed:
+    - `examples/riscv/example_rms_norm.py`
   - local host execution is wired and tested
   - `--run-qemu` now builds a freestanding RISC-V ELF and runs it through:
     - `qemu-riscv64` by default, or
@@ -607,6 +608,7 @@ Run a curated set of backend-neutral examples end to end.
   - current automated coverage includes:
     - freestanding ELF build validation on this machine
     - qemu smoke coverage when a simulator is available
+    - host/artifact coverage for `example_rms_norm.py`
   - broader completeness work should port the portable expansion set into backend-neutral
     `examples/riscv/` style entry points instead of trying to reuse the original GPU-oriented
     scripts unchanged
@@ -848,8 +850,9 @@ Treat the original examples in three tiers:
   - `examples/norm/rms_norm.py`
   - `examples/online_softmax/online_softmax.py`
   - `examples/topk/example_topk.py`
-  - implementation order after the current MVP demos:
-    - `examples/norm/rms_norm.py`
+  - current landed portable port:
+    - `examples/riscv/example_rms_norm.py`
+  - next implementation order after the current MVP demos:
     - `examples/online_softmax/online_softmax.py`
     - `examples/topk/example_topk.py`
     - `examples/convolution/example_convolution.py`

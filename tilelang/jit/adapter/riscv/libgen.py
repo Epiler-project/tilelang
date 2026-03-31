@@ -65,6 +65,7 @@ def build_debug_pipeline() -> Pipeline:
         "convert-scf-to-cf",
         "expand-strided-metadata",
         "finalize-memref-to-llvm",
+        "convert-math-to-llvm",
         "convert-arith-to-llvm",
         "convert-func-to-llvm",
         "convert-cf-to-llvm",
