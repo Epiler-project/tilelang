@@ -138,6 +138,7 @@ Do not start implementation before the toolchain is fixed.
   - `mlir-cpu-runner` if available
   - `llc`
   - `clang`
+  - `ld.lld`
   - `llvm-dis`
 - RISC-V backend enabled in LLVM
 - Python package support for the MLIR binding/driver layer
@@ -325,7 +326,7 @@ Recommended commit slicing:
   - broader reduction recognition beyond the simple full-shape sum pattern
   - broader `linalg.generic` / `linalg.reduce` coverage beyond the current simple cases
   - batched / mixed-shape `tl.gemm`
-  - real qemu/spike runner wiring behind `--run-qemu`
+  - broader qemu/spike validation beyond the current smoke path
   - validation environment for qemu/spike is currently absent on this machine (`qemu-riscv64`, `spike`, `pk` not found in `PATH`)
 
 ## Phase 0: Freeze Scope And Scaffolding
@@ -549,6 +550,7 @@ reconcile-unrealized-casts
 - the pipeline produces valid `.ll`
 - `llc` can produce RISC-V asm
 - `clang --target=${TILELANG_RISCV_TRIPLE}` can link a small object if a runtime harness is supplied
+- freestanding qemu/spike runner path expects `ld.lld` or another RISC-V-capable linker
 - `load_host_module()` can compile the same `.ll` into a native host `.so`
 - a tiny copy kernel runs correctly on local x86 CPU through the flattened memref ABI
 
@@ -571,6 +573,8 @@ Run a few examples end to end.
   - `load_host_module()` for NumPy/x86 host simulation
   - `RiscvKernelAdapter` for a lightweight CPU-torch-facing wrapper over the same host path
   - `tilelang.compile(..., target="riscv")` for direct JIT execution on the same host path
+  - `build_qemu_executable()` for a freestanding RISC-V ELF with embedded memref payloads
+  - `run_qemu()` for qemu/spike-style execution through a simulator command
 - create examples:
   - `examples/riscv/example_vector_add.py`
   - `examples/riscv/example_copy.py`
@@ -584,7 +588,12 @@ Run a few examples end to end.
 - current status:
   - all four examples are landed
   - local host execution is wired and tested
-  - `--run-qemu` is still a reserved stub until the qemu/spike runner lands
+  - `--run-qemu` now builds a freestanding RISC-V ELF and runs it through:
+    - `qemu-riscv64` by default, or
+    - `TILELANG_RISCV_RUNNER` such as `spike pk`
+  - current automated coverage includes:
+    - freestanding ELF build validation on this machine
+    - qemu smoke coverage when a simulator is available
 
 ### Acceptance
 
@@ -736,7 +745,7 @@ Create a new directory `testing/python/riscv`.
 ### Level 3: optional runtime
 
 - `test_riscv_qemu_smoke.py`
-  - only run when `qemu-riscv64` is available
+  - only run when `qemu-riscv64` or `TILELANG_RISCV_RUNNER` is available
   - exercises one tiny kernel end to end
 
 ## 10. Example Set
@@ -877,19 +886,19 @@ python examples/riscv/example_matmul.py --run-qemu
 
 - [ ] `riscv` target alias exists
 - [ ] `linalg_riscv` target kind is wired through Python and C++
-- [ ] RISC-V path uses dedicated lowering phases
-- [ ] MLIR emission works for loops, conditionals, loads, stores, allocs
-- [ ] region/subview lowering works
-- [ ] `tl.copy` works
-- [ ] elementwise lowering works
-- [ ] reduction lowering works
-- [ ] `tl.gemm -> linalg.matmul` works
-- [ ] MLIR verifies with `mlir-opt`
-- [ ] LLVM IR export works
-- [ ] RISC-V asm/object export works
-- [ ] four examples exist and run through at least MLIR emission
-- [ ] at least one runner path executes a kernel correctly
-- [ ] tests are added under `testing/python/riscv`
+- [x] RISC-V path uses dedicated lowering phases
+- [x] MLIR emission works for loops, conditionals, loads, stores, allocs
+- [x] region/subview lowering works
+- [x] `tl.copy` works
+- [x] elementwise lowering works
+- [x] reduction lowering works
+- [x] `tl.gemm -> linalg.matmul` works
+- [x] MLIR verifies with `mlir-opt`
+- [x] LLVM IR export works
+- [x] RISC-V asm/object export works
+- [x] four examples exist and run through at least MLIR emission
+- [x] at least one runner path executes a kernel correctly
+- [x] tests are added under `testing/python/riscv`
 
 ## 16. Post-MVP Work
 

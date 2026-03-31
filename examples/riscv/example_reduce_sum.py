@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import tilelang.language as T
 
-from examples.riscv.common import build_riscv_module, fail_unimplemented_qemu, finalize_args, make_parser, maybe_emit_artifacts, maybe_print_tir, run_host
+from examples.riscv.common import build_riscv_module, finalize_args, make_parser, maybe_emit_artifacts, maybe_print_tir, run_host, run_qemu
 
 
 M = 4
@@ -39,7 +39,11 @@ def main(argv: list[str] | None = None) -> int:
         print("host check passed")
 
     if args.run_qemu:
-        fail_unimplemented_qemu()
+        data = np.arange(M * K, dtype=np.float32).reshape(M, K)
+        out = np.zeros((M,), dtype=np.float32)
+        run_qemu(rt_mod, "reduce_sum", data, out, output_dir=args.output_dir)
+        np.testing.assert_allclose(out, data.sum(axis=1))
+        print("qemu check passed")
 
     return 0
 

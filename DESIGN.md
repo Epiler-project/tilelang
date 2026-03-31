@@ -301,8 +301,7 @@ Python DSL
   - 更广的 reduction 识别，而不只覆盖简单 full-shape sum
   - 更广的 `linalg.generic`、`linalg.reduce` 覆盖面
   - batched / mixed-shape `tl.gemm`
-  - qemu / spike / rv64 smoke runner
-  - `--run-qemu` 背后的真实执行器
+  - 更广的 qemu / spike / rv64 smoke 覆盖
   - 当前机器缺少 `qemu-riscv64` / `spike` / `pk`，因此真实 RISC-V runner 还缺运行环境验证
 
 
@@ -774,6 +773,8 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
   - `build_host_shared_library()`
   - `load_host_module()`
   - `run_host()`
+- 提供 freestanding runner 侧工具链封装：
+  - `ld.lld` 或其他 RISC-V capable linker
 - 当前默认走 debug loops 路线：
   - `func.func(convert-linalg-to-loops)`
   - `convert-scf-to-cf`
@@ -804,7 +805,12 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
   - `--emit-asm`
   - `--emit-object`
   - `--run-host`
-- `--run-qemu` 仍然保留为下一阶段工作
+  - `--run-qemu`
+- `--run-qemu` 当前通过 freestanding RISC-V harness 执行：
+  - 默认查找 `qemu-riscv64`
+  - 或使用 `TILELANG_RISCV_RUNNER` 覆盖，例如 `spike pk`
+  - 当前仓库内已补充 freestanding ELF build 测试与可选的 qemu smoke test
+  - 但这台机器仍缺 qemu/spike 运行环境，所以真实仿真执行暂时只能在有 runner 的机器上验证
 
 ### 阶段 4：性能优化
 

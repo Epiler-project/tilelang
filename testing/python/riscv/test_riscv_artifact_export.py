@@ -8,6 +8,7 @@ from tilelang import tvm
 from tilelang.engine.param import KernelParam
 from tilelang.jit.adapter.riscv import (
     RiscvKernelAdapter,
+    build_qemu_executable,
     emit_asm,
     emit_llvm_ir,
     emit_mlir,
@@ -94,6 +95,22 @@ def test_riscv_host_sim_executes_copy_on_native_cpu(tmp_path):
 
     assert so_path.is_file()
     np.testing.assert_array_equal(out, data)
+
+
+def test_riscv_qemu_builder_emits_freestanding_elf(tmp_path):
+    _, rt_mod = _real_mlir_module_or_skip()
+    exe_path = tmp_path / "copy.qemu.elf"
+    data = np.arange(4, dtype=np.float32)
+    out = np.zeros_like(data)
+
+    try:
+        built = build_qemu_executable(rt_mod, data, out, path=exe_path)
+    except ToolchainNotFoundError as err:
+        pytest.skip(str(err))
+
+    assert built == exe_path
+    assert exe_path.is_file()
+    assert exe_path.read_bytes().startswith(b"\x7fELF")
 
 
 def test_riscv_kernel_adapter_executes_copy_on_cpu_torch():

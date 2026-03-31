@@ -6,7 +6,17 @@ from typing import Any
 
 from tilelang import tvm
 from tilelang.engine.phase import LowerAndLegalizeForRISCV, OptimizeForRISCV
-from tilelang.jit.adapter.riscv import emit_asm, emit_llvm_ir, emit_mlir, emit_object, load_host_module
+from tilelang.jit.adapter.riscv import (
+    RiscvRunnerError,
+    RiscvRunnerNotFoundError,
+    emit_asm,
+    emit_llvm_ir,
+    emit_mlir,
+    emit_object,
+    load_host_module,
+    run_qemu as run_qemu_module,
+)
+from tilelang.tladapter.toolchain import ToolchainNotFoundError
 
 
 def make_parser(description: str) -> argparse.ArgumentParser:
@@ -17,7 +27,11 @@ def make_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--emit-asm", action="store_true", help="Print and optionally save RISC-V assembly")
     parser.add_argument("--emit-object", action="store_true", help="Save a RISC-V object file")
     parser.add_argument("--run-host", action="store_true", help="Run the kernel through the native x86 host path")
-    parser.add_argument("--run-qemu", action="store_true", help="Reserved for future qemu/spike execution")
+    parser.add_argument(
+        "--run-qemu",
+        action="store_true",
+        help="Run the kernel through qemu-riscv64 or TILELANG_RISCV_RUNNER",
+    )
     parser.add_argument("--output-dir", type=Path, default=None, help="Directory used for emitted artifacts")
     return parser
 
@@ -112,5 +126,12 @@ def run_host(rt_mod: Any, stem: str, *args: Any, output_dir: Path | None = None)
         library.close()
 
 
-def fail_unimplemented_qemu() -> None:
-    raise SystemExit("QEMU/Spike execution is not implemented yet. Use --emit-asm/--emit-object for RISC-V artifacts.")
+def run_qemu(rt_mod: Any, stem: str, *args: Any, output_dir: Path | None = None) -> None:
+    active_output_dir = ensure_output_dir(output_dir)
+    exe_path = active_output_dir / f"{stem}.qemu.elf" if active_output_dir is not None else None
+    try:
+        run_qemu_module(rt_mod, *args, path=exe_path)
+    except (RiscvRunnerError, RiscvRunnerNotFoundError, ToolchainNotFoundError) as err:
+        raise SystemExit(str(err)) from err
+    if exe_path is not None:
+        print(f"[qemu] {exe_path}")

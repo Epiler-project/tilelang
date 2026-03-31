@@ -137,7 +137,7 @@ def toolchain_summary() -> dict[str, str]:
     mlir_python_root = resolve_mlir_python_root(required=False)
     if mlir_python_root is not None:
         summary["mlir_python_root"] = str(mlir_python_root)
-    for tool in ("mlir-opt", "mlir-translate", "llc", "clang"):
+    for tool in ("mlir-opt", "mlir-translate", "llc", "clang", "ld.lld"):
         tool_path = resolve_tool(tool, required=False)
         if tool_path is not None:
             summary[tool.replace("-", "_")] = str(tool_path)
