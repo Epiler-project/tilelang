@@ -21,6 +21,7 @@ GROUP_N = 5
 GROUP_TOTAL_DYNAMIC = T.dynamic("group_total_dynamic")
 GROUP_COUNT_DYNAMIC = 3
 GROUP_COUNT_DYNAMIC_SYM = T.dynamic("group_count_dynamic")
+BATCH_DYNAMIC = T.dynamic("batch_dynamic")
 
 
 @T.prim_func
@@ -449,4 +450,39 @@ def test_tilelang_compile_runs_riscv_host_adapter_with_rank_reduced_tile_gemm():
     assert "func.func @tile_batched_gemm_rank_reduced" in source
     assert source.count("linalg.matmul") == 1
     assert "memref.subview" in source
+    torch.testing.assert_close(out, torch.matmul(lhs, rhs))
+
+
+@T.prim_func
+def tile_dynamic_batched_gemm_rank_reduced(
+    A: T.Tensor((BATCH_DYNAMIC, 2, 3), "float32"),
+    B: T.Tensor((BATCH_DYNAMIC, 3, 4), "float32"),
+    C: T.Tensor((BATCH_DYNAMIC, 2, 4), "float32"),
+):
+    with T.Kernel(1, threads=1):
+        A_shared = T.alloc_shared((BATCH_DYNAMIC, 2, 3), "float32")
+        B_shared = T.alloc_shared((BATCH_DYNAMIC, 3, 4), "float32")
+        T.copy(A, A_shared)
+        T.copy(B, B_shared)
+        for b in T.serial(BATCH_DYNAMIC):
+            C_local = T.alloc_fragment((2, 4), "float32")
+            T.clear(C_local)
+            T.gemm(A_shared[b, :, :], B_shared[b, :, :], C_local)
+            T.copy(C_local, C[b, :, :])
+
+
+def test_tilelang_compile_runs_riscv_host_adapter_with_dynamic_batched_tile_gemm():
+    kernel = tilelang.compile(tile_dynamic_batched_gemm_rank_reduced, out_idx=[2], target="riscv")
+
+    lhs = torch.arange(18, dtype=torch.float32).reshape(3, 2, 3)
+    rhs = torch.arange(36, dtype=torch.float32).reshape(3, 3, 4)
+    out = kernel(lhs, rhs)
+
+    source = kernel.get_kernel_source()
+    kernel.close()
+
+    assert "func.func @tile_dynamic_batched_gemm_rank_reduced" in source
+    assert "memref<?x2x3xf32>" in source
+    assert "memref.subview" in source
+    assert source.count("linalg.matmul") == 1
     torch.testing.assert_close(out, torch.matmul(lhs, rhs))

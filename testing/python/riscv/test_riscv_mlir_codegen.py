@@ -10,6 +10,7 @@ from tilelang.engine.phase import LowerAndLegalizeForRISCV, OptimizeForRISCV
 GROUP_TOTAL_DYNAMIC = T.dynamic("group_total")
 GROUP_COUNT_DYNAMIC = 3
 GROUP_COUNT_DYNAMIC_SYM = T.dynamic("group_count_dynamic")
+BATCH_DYNAMIC = T.dynamic("batch_dynamic")
 
 
 def _build_mlir_module(func=None, global_symbol="kernel"):
@@ -602,6 +603,34 @@ def test_riscv_codegen_lowers_rank_reduced_tilelang_gemm_slices():
     source = _real_mlir_source_or_skip(_build_mlir_from_tilelang_prim(tile_batched_gemm, "tile_batched_gemm"))
 
     assert "func.func @tile_batched_gemm(%arg0: memref<2x2x3xf32>, %arg1: memref<2x3x4xf32>, %arg2: memref<2x2x4xf32>)" in source
+    assert "memref.subview" in source
+    assert source.count("linalg.matmul") == 1
+    assert "scf.for" in source
+
+
+def test_riscv_codegen_lowers_dynamic_rank_reduced_tilelang_gemm_slices():
+    @T.prim_func
+    def tile_dynamic_batched_gemm(
+        A: T.Tensor((BATCH_DYNAMIC, 2, 3), "float32"),
+        B: T.Tensor((BATCH_DYNAMIC, 3, 4), "float32"),
+        C: T.Tensor((BATCH_DYNAMIC, 2, 4), "float32"),
+    ):
+        with T.Kernel(1, threads=1):
+            A_shared = T.alloc_shared((BATCH_DYNAMIC, 2, 3), "float32")
+            B_shared = T.alloc_shared((BATCH_DYNAMIC, 3, 4), "float32")
+            T.copy(A, A_shared)
+            T.copy(B, B_shared)
+            for b in T.serial(BATCH_DYNAMIC):
+                C_local = T.alloc_fragment((2, 4), "float32")
+                T.clear(C_local)
+                T.gemm(A_shared[b, :, :], B_shared[b, :, :], C_local)
+                T.copy(C_local, C[b, :, :])
+
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_tilelang_prim(tile_dynamic_batched_gemm, "tile_dynamic_batched_gemm")
+    )
+
+    assert "func.func @tile_dynamic_batched_gemm(%arg0: memref<?x2x3xf32>, %arg1: memref<?x3x4xf32>, %arg2: memref<?x2x4xf32>)" in source
     assert "memref.subview" in source
     assert source.count("linalg.matmul") == 1
     assert "scf.for" in source

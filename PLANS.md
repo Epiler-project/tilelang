@@ -329,6 +329,7 @@ Recommended commit slicing:
     - `examples/riscv/example_reduce_max.py`
     - `examples/riscv/example_matmul.py`
     - `examples/riscv/example_batched_gemm.py`
+    - `examples/riscv/example_dynamic_batched_gemm.py`
     - `examples/riscv/example_gemv.py`
     - `examples/riscv/example_grouped_gemm.py`
     - `examples/riscv/example_dynamic_grouped_gemm.py`
@@ -361,7 +362,7 @@ Recommended commit slicing:
     - single-axis full-shape sum/min/max patterns
     - additive expression reductions with identity + output-broadcast inputs
   - broader `linalg.generic` / `linalg.reduce` coverage beyond the current simple cases
-  - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched case
+  - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched slices
   - local `pytest testing/python/riscv -q` also requires a built TileLang/TVM Python environment with `tvm_ffi` importable
 
 ## Phase 0: Freeze Scope And Scaffolding
@@ -636,6 +637,8 @@ Run a curated set of backend-neutral examples end to end.
     - `examples/riscv/example_reduce_max.py`
   - additional structured coverage example landed:
     - `examples/riscv/example_batched_gemm.py`
+  - additional dynamic mixed-shape example landed:
+    - `examples/riscv/example_dynamic_batched_gemm.py`
   - Tier 1 portable ports landed:
     - `examples/riscv/example_dynamic_shape.py`
     - `examples/riscv/example_rms_norm.py`
@@ -654,6 +657,7 @@ Run a curated set of backend-neutral examples end to end.
     - host/artifact coverage for `example_convolution.py`
     - host/artifact coverage for `example_reduce_max.py`
     - host/artifact coverage for `example_batched_gemm.py`
+    - host/artifact coverage for `example_dynamic_batched_gemm.py`
     - host/artifact coverage for `example_gemv.py`
     - host/artifact coverage for `example_grouped_gemm.py`
     - host/artifact coverage for `example_dynamic_grouped_gemm.py`
@@ -662,11 +666,12 @@ Run a curated set of backend-neutral examples end to end.
     - `tilelang.compile(..., target="riscv")` reduction-expression generic host execution
     - `tilelang.compile(..., target="riscv")` broadcast elementwise generic host execution
     - `tilelang.compile(..., target="riscv")` rank-reduced batched GEMM host execution
+    - `tilelang.compile(..., target="riscv")` dynamic rank-reduced batched GEMM host execution
     - `tilelang.compile(..., target="riscv")` singleton-dim GEMV host execution
     - `tilelang.compile(..., target="riscv")` compile-time grouped GEMM host execution
     - `tilelang.compile(..., target="riscv")` dynamic grouped GEMM host execution
     - full `testing/python/riscv` regression currently passes on this machine:
-      `80 passed, 1 skipped`
+      `84 passed, 1 skipped`
   - dynamic grouped GEMM lowering status:
     - runtime dynamic `group_count` plus `Offsets` / `Sizes` now lower as a single
       `scf.for`-driven grouped dispatch
@@ -693,6 +698,7 @@ Run a curated set of backend-neutral examples end to end.
     - `tl.copy` supports logical-shape-compatible copies when source/destination only differ by
       static-1 dims
     - `tl.gemm` accepts logical 2D operands sliced from higher-rank buffers
+    - symbolic batch-count batched slices now lower through the same rank-reduced GEMM path
     - explicit singleton-dim operands such as `(K, 1)` are preserved for GEMV-style
       `tl.gemm`, instead of being rank-reduced away
   - broader completeness work should port the portable expansion set into backend-neutral
@@ -707,6 +713,7 @@ Run a curated set of backend-neutral examples end to end.
 - reduce max example runs on local host
 - matmul example runs on local host
 - batched gemm example runs on local host
+- dynamic batched gemm example runs on local host
 - gemv example runs on local host
 - grouped gemm example runs on local host
 - dynamic grouped gemm example runs on local host
@@ -1042,17 +1049,20 @@ python examples/riscv/example_reduce_sum.py --emit-mlir
 python examples/riscv/example_reduce_max.py --emit-mlir
 python examples/riscv/example_matmul.py --emit-mlir
 python examples/riscv/example_batched_gemm.py --emit-mlir
+python examples/riscv/example_dynamic_batched_gemm.py --emit-mlir
 
 python examples/riscv/example_vector_add.py --emit-asm
 python examples/riscv/example_reduce_max.py --emit-asm
 python examples/riscv/example_matmul.py --emit-asm
 python examples/riscv/example_batched_gemm.py --emit-asm
+python examples/riscv/example_dynamic_batched_gemm.py --emit-asm
 python examples/riscv/example_vector_add.py --run-host
 python examples/riscv/example_copy.py --run-host
 python examples/riscv/example_reduce_sum.py --run-host
 python examples/riscv/example_reduce_max.py --run-host
 python examples/riscv/example_matmul.py --run-host
 python examples/riscv/example_batched_gemm.py --run-host
+python examples/riscv/example_dynamic_batched_gemm.py --run-host
 ```
 
 Optional runtime validation:

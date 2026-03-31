@@ -383,6 +383,7 @@ Python DSL
   - `examples/riscv/example_reduce_max.py`
   - `examples/riscv/example_matmul.py`
   - `examples/riscv/example_batched_gemm.py`
+  - `examples/riscv/example_dynamic_batched_gemm.py`
   - `examples/riscv/example_gemv.py`
   - `examples/riscv/example_grouped_gemm.py`
   - `examples/riscv/example_dynamic_grouped_gemm.py`
@@ -406,6 +407,8 @@ Python DSL
       dropping static-1 dimensions
     - batched slices such as `A_shared[b, :, :]` / `B_shared[b, :, :]` now lower through
       `memref.subview` and run on the host path
+    - dynamic batched slices with symbolic batch count now lower through the same
+      rank-reduced `memref.subview + scf.for + linalg.matmul` path
     - explicit singleton-dim operands such as `(K, 1)` are preserved for `tl.gemm`, so
       GEMV-style kernels lower through `linalg.matmul` without collapsing the vector operand
       away
@@ -426,6 +429,12 @@ Python DSL
     - `examples/riscv/example_gemv.py` is landed as a backend-neutral Tier 2 example
     - direct `tilelang.compile(..., target="riscv")` GEMV kernels with `(K, 1)` operands are
       covered by MLIR, host-runtime, and example tests
+  - dynamic batched GEMM coverage on the host path
+    - `examples/riscv/example_dynamic_batched_gemm.py` is landed as a backend-neutral Tier 2
+      example
+    - symbolic batch-count slices now lower through the same rank-reduced batched GEMM path
+    - direct `tilelang.compile(..., target="riscv")` dynamic batched GEMM kernels are covered by
+      MLIR, host-runtime, and example tests
   - compile-time grouped GEMM coverage on the host path
     - `examples/riscv/example_grouped_gemm.py` is landed as a backend-neutral Tier 2 example
     - each group is expanded as a static slice and lowered through its own `linalg.matmul`
@@ -439,7 +448,7 @@ Python DSL
     - direct `tilelang.compile(..., target="riscv")` dynamic grouped-gemm kernels are covered by
       MLIR, host-runtime, and example tests
   - local regression status on this machine:
-    - `python -m pytest testing/python/riscv -q` passes with `80 passed, 1 skipped`
+    - `python -m pytest testing/python/riscv -q` passes with `84 passed, 1 skipped`
 - 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
 - 仍然属于后续任务的部分主要是：
   - 将 Tier 1 portable suite 固化成更稳定的长期验收矩阵与持续扩展入口
@@ -461,7 +470,7 @@ Python DSL
     - 当前 elementwise 已覆盖 identity-load 与 ordered-subsequence broadcast-load
       的规则表达式
     - 更一般的 mixed indexing / gather-scatter / predicated elementwise 仍未结构化
-  - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched slice
+  - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched slices
 
 
 ## 6. 切入点设计
@@ -965,6 +974,7 @@ MVP 建议先打通路线 A；路线 B 不在本轮任务范围内。
   - `examples/riscv/example_reduce_max.py`
   - `examples/riscv/example_matmul.py`
   - `examples/riscv/example_batched_gemm.py`
+  - `examples/riscv/example_dynamic_batched_gemm.py`
   - `examples/riscv/example_rms_norm.py`
   - `examples/riscv/example_online_softmax.py`
   - `examples/riscv/example_topk.py`
