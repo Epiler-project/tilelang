@@ -264,11 +264,38 @@ Recommended commit slicing:
     - TileLang `T.copy` kernel shell
     - TileLang `T.clear` / fill kernel shell
     - TileLang `T.gemm -> linalg.matmul` kernel shell
+- Phase 2 artifact/export + host-sim surface is partially landed:
+  - `tilelang/jit/adapter/riscv/libgen.py` currently exports:
+    - `emit_mlir()`
+    - `emit_llvm_ir()`
+    - `emit_asm()`
+    - `emit_object()`
+  - `tilelang/jit/adapter/riscv/wrapper.py` currently exports:
+    - `build_host_shared_library()`
+    - `load_host_module()`
+    - `run_host()`
+  - the current default debug pipeline is:
+    - `canonicalize`
+    - `cse`
+    - `func.func(convert-linalg-to-loops)`
+    - `canonicalize`
+    - `cse`
+    - `convert-scf-to-cf`
+    - `expand-strided-metadata`
+    - `finalize-memref-to-llvm`
+    - `convert-arith-to-llvm`
+    - `convert-func-to-llvm`
+    - `convert-cf-to-llvm`
+    - `reconcile-unrealized-casts`
+  - automated coverage currently includes:
+    - `.mlir/.ll/.s/.o` export
+    - native x86 host shared-library build and NumPy correctness on copy
 - next gap has shifted to Phase 2+:
   - broader region / subview / slice lowering beyond the simple contiguous case
   - native reduction recognition beyond `LowerInitBlock + scf` fallback
   - `linalg.generic` / `linalg.reduce`
   - transposed / batched / mixed-shape `tl.gemm`
+  - example set and qemu/spike runner wiring
 
 ## Phase 0: Freeze Scope And Scaffolding
 
@@ -450,25 +477,24 @@ Lower MLIR to LLVM IR and RISC-V code, then export artifacts.
 - add a stable pipeline with two modes:
   - debug path: `linalg -> loops`
   - optimized path: `linalg -> vector -> llvm`
-- start with this default pipeline:
+- current landed default pipeline is:
 
 ```text
 canonicalize
 cse
-one-shot-bufferize
+func.func(convert-linalg-to-loops)
 canonicalize
 cse
-convert-linalg-to-vector
-canonicalize
-cse
-convert-vector-to-scf
 convert-scf-to-cf
 expand-strided-metadata
 finalize-memref-to-llvm
-convert-vector-to-llvm
+convert-arith-to-llvm
 convert-func-to-llvm
+convert-cf-to-llvm
 reconcile-unrealized-casts
 ```
+
+- optimized vector/RVV path remains a follow-up after correctness/examples stabilize
 
 - add export helpers for:
   - `emit_mlir()`
@@ -486,6 +512,8 @@ reconcile-unrealized-casts
 - the pipeline produces valid `.ll`
 - `llc` can produce RISC-V asm
 - `clang --target=${TILELANG_RISCV_TRIPLE}` can link a small object if a runtime harness is supplied
+- `load_host_module()` can compile the same `.ll` into a native host `.so`
+- a tiny copy kernel runs correctly on local x86 CPU through the flattened memref ABI
 
 ## Phase 5: Runner Integration And Examples
 
@@ -502,6 +530,9 @@ Run a few examples end to end.
 - support two execution modes:
   - host simulation
   - qemu/spike execution
+- current landed runner surface:
+  - `load_host_module()` for NumPy/x86 host simulation
+  - `RiscvKernelAdapter` for a lightweight CPU-torch-facing wrapper over the same host path
 - create examples:
   - `examples/riscv/example_vector_add.py`
   - `examples/riscv/example_copy.py`
@@ -617,6 +648,8 @@ Improve performance after correctness is stable.
   - tool detection
   - pipeline building
   - artifact path generation
+  - native host `.so` build
+  - flattened memref ABI packing for NumPy / ctypes host simulation
   - optional qemu/spike launching
 
 ## 9. Tests To Add
@@ -647,6 +680,7 @@ Create a new directory `testing/python/riscv`.
 - `test_riscv_artifact_export.py`
   - `.mlir`, `.ll`, `.s`, `.o` are produced
   - export paths are deterministic
+  - native x86 host simulation can run a copy kernel
 
 ### Level 3: optional runtime
 

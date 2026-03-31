@@ -246,6 +246,28 @@ Python DSL
   - `BufferLoad/BufferStore -> memref.load/store`
   - simple reduction init block 通过 `LowerInitBlock` 降成 `scf.if` fallback
   - 常量、`Cast`、`Add/Sub/Mul/Div`、比较、`Select`
+- 当前已经打通的 artifact/export + host 验证子集包括：
+  - `emit_mlir()`
+  - `emit_llvm_ir()`
+  - `emit_asm()`
+  - `emit_object()`
+  - `build_host_shared_library()`
+  - `load_host_module()`
+  - `run_host()`
+  - 基于 `ctypes + NumPy` 的 flattened memref ABI host simulation
+- 当前默认 debug pipeline 为：
+  - `canonicalize`
+  - `cse`
+  - `func.func(convert-linalg-to-loops)`
+  - `canonicalize`
+  - `cse`
+  - `convert-scf-to-cf`
+  - `expand-strided-metadata`
+  - `finalize-memref-to-llvm`
+  - `convert-arith-to-llvm`
+  - `convert-func-to-llvm`
+  - `convert-cf-to-llvm`
+  - `reconcile-unrealized-casts`
 - 已有自动化样例覆盖：
   - simple copy
   - elementwise add
@@ -257,11 +279,15 @@ Python DSL
   - TileLang `T.copy` kernel shell
   - TileLang `T.clear` / fill kernel shell
   - TileLang `T.gemm -> linalg.matmul` kernel shell
+  - `.mlir/.ll/.s/.o` artifact export
+  - x86 host shared-library build and copy-kernel correctness
 - 仍然属于后续任务的部分主要是：
   - 更完整的 region / subview 组合与 rank-reduction 场景
   - 更直接的 reduction 识别，而不是只依赖 `LowerInitBlock + scf` fallback
   - `linalg.generic`、`linalg.reduce`
   - transposed / batched / mixed-shape `tl.gemm`
+  - qemu / spike / rv64 smoke runner
+  - 示例集与 CLI 约定的完整落地
 
 
 ## 6. 切入点设计
@@ -709,6 +735,7 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
 
 - 生成 LLVM IR
 - 编译成 RISC-V 目标文件
+- 先在本机 x86 host 上验证同一条 LLVM lowering 通路能真实执行
 
 实现：
 
@@ -718,6 +745,15 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
   - `.ll`
   - `.o`
   - `.s`
+- 提供 host 侧运行封装：
+  - `build_host_shared_library()`
+  - `load_host_module()`
+  - `run_host()`
+- 当前默认走 debug loops 路线：
+  - `func.func(convert-linalg-to-loops)`
+  - `convert-scf-to-cf`
+  - `finalize-memref-to-llvm`
+  - `convert-arith/func/cf-to-llvm`
 
 测试：
 
