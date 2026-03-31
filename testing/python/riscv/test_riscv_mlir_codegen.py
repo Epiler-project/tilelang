@@ -461,6 +461,37 @@ def test_riscv_codegen_lowers_dynamic_tilelang_gemm_to_linalg_matmul():
     assert "memref.store" in source
 
 
+def test_riscv_codegen_lowers_rank_reduced_tilelang_gemm_slices():
+    batch = 2
+    m = 2
+    n = 4
+    k = 3
+
+    @T.prim_func
+    def tile_batched_gemm(
+        A: T.Tensor((batch, m, k), "float32"),
+        B: T.Tensor((batch, k, n), "float32"),
+        C: T.Tensor((batch, m, n), "float32"),
+    ):
+        with T.Kernel(1, threads=1):
+            A_shared = T.alloc_shared((batch, m, k), "float32")
+            B_shared = T.alloc_shared((batch, k, n), "float32")
+            T.copy(A, A_shared)
+            T.copy(B, B_shared)
+            for b in T.serial(batch):
+                C_local = T.alloc_fragment((m, n), "float32")
+                T.clear(C_local)
+                T.gemm(A_shared[b, :, :], B_shared[b, :, :], C_local)
+                T.copy(C_local, C[b, :, :])
+
+    source = _real_mlir_source_or_skip(_build_mlir_from_tilelang_prim(tile_batched_gemm, "tile_batched_gemm"))
+
+    assert "func.func @tile_batched_gemm(%arg0: memref<2x2x3xf32>, %arg1: memref<2x3x4xf32>, %arg2: memref<2x2x4xf32>)" in source
+    assert "memref.subview" in source
+    assert source.count("linalg.matmul") == 1
+    assert "scf.for" in source
+
+
 def test_riscv_codegen_lowers_tilelang_gemm_transpose_b():
     @T.prim_func
     def tile_matmul_transpose_b(

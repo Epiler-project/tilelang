@@ -116,6 +116,7 @@ The project is considered complete for MVP when all items below are true.
 - `examples/riscv/example_copy.py`
 - `examples/riscv/example_reduce_sum.py`
 - `examples/riscv/example_matmul.py`
+- `examples/riscv/example_batched_gemm.py`
 - `examples/riscv/common.py`
 
 ### Optional helper files
@@ -312,6 +313,7 @@ Recommended commit slicing:
     - `examples/riscv/example_copy.py`
     - `examples/riscv/example_reduce_sum.py`
     - `examples/riscv/example_matmul.py`
+    - `examples/riscv/example_batched_gemm.py`
   - current example CLI surface:
     - `--print-tir`
     - `--emit-mlir`
@@ -329,10 +331,13 @@ Recommended commit slicing:
     - direct JIT compile + local CPU execution
     - disk-cache reload without recompilation
 - next gap has shifted to Phase 2+:
-  - broader region / subview / slice lowering beyond the simple contiguous case
+  - broader region / subview / slice lowering beyond:
+    - the simple contiguous case
+    - compact row-major symbolic layouts
+    - static-1 rank-reduced views
   - broader reduction recognition beyond the simple full-shape sum pattern
   - broader `linalg.generic` / `linalg.reduce` coverage beyond the current simple cases
-  - batched / mixed-shape `tl.gemm`
+  - mixed-shape `tl.gemm` beyond the current rank-reduced batched case
   - broader qemu/spike validation beyond the current smoke path
   - validation environment for qemu/spike is currently absent on this machine (`qemu-riscv64`, `spike`, `pk` not found in `PATH`)
 
@@ -596,6 +601,8 @@ Run a curated set of backend-neutral examples end to end.
   - optional run
 - current status:
   - all four examples are landed
+  - additional structured coverage example landed:
+    - `examples/riscv/example_batched_gemm.py`
   - Tier 1 portable ports landed:
     - `examples/riscv/example_dynamic_shape.py`
     - `examples/riscv/example_rms_norm.py`
@@ -614,14 +621,20 @@ Run a curated set of backend-neutral examples end to end.
     - host/artifact coverage for `example_online_softmax.py`
     - host/artifact coverage for `example_topk.py`
     - host/artifact coverage for `example_convolution.py`
+    - host/artifact coverage for `example_batched_gemm.py`
     - `tilelang.compile(..., target="riscv")` dynamic-shape host execution
+    - `tilelang.compile(..., target="riscv")` rank-reduced batched GEMM host execution
     - full `testing/python/riscv` regression currently passes on this machine:
-      `55 passed, 1 skipped`
+      `59 passed, 1 skipped`
   - dynamic-shape lowering status:
     - buffer shape vars are rebound from function memrefs via `memref.dim`
     - symbolic compact row-major strides remain accepted in the JIT path
     - dynamic `T.copy` and `T.gemm` host kernels are covered as a portable `copy + gemm`
       path, not just a direct loop fallback
+  - rank-reduced slice lowering status:
+    - static-1 dimensions can now be dropped through rank-reduced `memref.subview`
+    - `tl.copy` supports logical-rank copies when source/destination only differ by static-1 dims
+    - `tl.gemm` accepts logical 2D operands sliced from higher-rank buffers
   - broader completeness work should port the portable expansion set into backend-neutral
     `examples/riscv/` style entry points instead of trying to reuse the original GPU-oriented
     scripts unchanged
@@ -632,6 +645,7 @@ Run a curated set of backend-neutral examples end to end.
 - copy example runs on local host
 - reduce sum example runs on local host
 - matmul example runs on local host
+- batched gemm example runs on local host
 - each example has a reference NumPy or Torch correctness check
 - each example can emit RISC-V `.s` and `.o`
 
@@ -870,6 +884,8 @@ Treat the original examples in three tiers:
     - `examples/riscv/example_online_softmax.py`
     - `examples/riscv/example_topk.py`
     - `examples/riscv/example_convolution.py`
+  - additional backend-neutral structured example coverage:
+    - `examples/riscv/example_batched_gemm.py`
   - current status:
     - the Tier 1 portable completeness suite is covered in the current backend-neutral plan
   - `examples/elementwise/example_elementwise_add.py` and `examples/gemm/example_gemm.py`
@@ -969,13 +985,16 @@ python examples/riscv/example_vector_add.py --emit-mlir
 python examples/riscv/example_copy.py --emit-mlir
 python examples/riscv/example_reduce_sum.py --emit-mlir
 python examples/riscv/example_matmul.py --emit-mlir
+python examples/riscv/example_batched_gemm.py --emit-mlir
 
 python examples/riscv/example_vector_add.py --emit-asm
 python examples/riscv/example_matmul.py --emit-asm
+python examples/riscv/example_batched_gemm.py --emit-asm
 python examples/riscv/example_vector_add.py --run-host
 python examples/riscv/example_copy.py --run-host
 python examples/riscv/example_reduce_sum.py --run-host
 python examples/riscv/example_matmul.py --run-host
+python examples/riscv/example_batched_gemm.py --run-host
 ```
 
 Optional runtime validation:

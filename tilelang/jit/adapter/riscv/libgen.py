@@ -64,6 +64,7 @@ def build_debug_pipeline() -> Pipeline:
         "cse",
         "convert-scf-to-cf",
         "expand-strided-metadata",
+        "lower-affine",
         "finalize-memref-to-llvm",
         "convert-math-to-llvm",
         "convert-arith-to-llvm",

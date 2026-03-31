@@ -982,6 +982,30 @@ private:
         .getResult();
   }
 
+  mlir::Value CreateLogicalSubview(const tir::BufferRegion& region) {
+    Array<PrimExpr> logical_extents;
+    for (const Range& range : region->region) {
+      if (!IsStaticOne(range->extent)) {
+        logical_extents.push_back(range->extent);
+      }
+    }
+    if (logical_extents.size() == region->region.size()) {
+      return CreateSubview(region);
+    }
+
+    const tir::Buffer& source_buffer = region->buffer;
+    mlir::Value source = LookupBufferValue(source_buffer);
+    mlir::MemRefType source_type = mlir::cast<mlir::MemRefType>(source.getType());
+    llvm::SmallVector<mlir::OpFoldResult, 4> offsets = LowerRegionOffsets(region->region);
+    llvm::SmallVector<mlir::OpFoldResult, 4> sizes = LowerRegionSizes(region->region);
+    llvm::SmallVector<mlir::OpFoldResult, 4> strides = UnitStrides(region->region.size());
+    mlir::MemRefType result_type = mlir::memref::SubViewOp::inferRankReducedResultType(
+        LowerStaticShape(logical_extents), source_type, offsets, sizes, strides);
+    return builder_
+        .create<mlir::memref::SubViewOp>(loc_, result_type, source, offsets, sizes, strides)
+        .getResult();
+  }
+
   mlir::Value CreateAlloca(const Array<PrimExpr>& shape_exprs, DataType element_dtype) {
     mlir::MemRefType memref_type = LowerMemRefType(element_dtype, shape_exprs);
     llvm::SmallVector<mlir::Value, 4> dynamic_sizes = LowerDynamicSizes(shape_exprs);
@@ -1084,6 +1108,44 @@ private:
     return indices;
   }
 
+  Array<Range> LogicalRegion(const Array<Range>& region) {
+    Array<Range> logical_region;
+    for (const Range& range : region) {
+      if (!IsStaticOne(range->extent)) {
+        logical_region.push_back(range);
+      }
+    }
+    return logical_region;
+  }
+
+  Array<PrimExpr> LogicalRegionExtents(const tir::BufferRegion& region) {
+    Array<PrimExpr> extents;
+    for (const Range& range : region->region) {
+      if (!IsStaticOne(range->extent)) {
+        extents.push_back(range->extent);
+      }
+    }
+    return extents;
+  }
+
+  llvm::SmallVector<mlir::Value, 4> LowerLogicalRegionIndices(
+      const tir::BufferRegion& region, llvm::ArrayRef<mlir::Value> coords) {
+    llvm::SmallVector<mlir::Value, 4> indices;
+    indices.reserve(region->region.size());
+    size_t logical_dim = 0;
+    for (const Range& range : region->region) {
+      if (IsStaticOne(range->extent)) {
+        indices.push_back(AsIndex(VisitExpr(range->min), range->min.dtype()));
+        continue;
+      }
+      ICHECK_LT(logical_dim, coords.size());
+      indices.push_back(OffsetIndex(coords[logical_dim], range->min));
+      ++logical_dim;
+    }
+    ICHECK_EQ(logical_dim, coords.size());
+    return indices;
+  }
+
   bool RegionsHaveSameStaticExtents(const tir::BufferRegion& lhs, const tir::BufferRegion& rhs) {
     if (lhs->region.size() != rhs->region.size()) {
       return false;
@@ -1121,29 +1183,46 @@ private:
     mlir::Value src_memref = LookupBufferValue(src_buffer);
     mlir::Value dst_memref = LookupBufferValue(dst_buffer);
 
-    ICHECK_EQ(src_region->region.size(), dst_region->region.size())
-        << "tl.copy currently requires source and destination ranks to match";
+    if (src_region->region.size() == dst_region->region.size()) {
+      if (src_buffer->dtype == dst_buffer->dtype && RegionsHaveSameStaticExtents(src_region, dst_region)) {
+        builder_.create<mlir::memref::CopyOp>(loc_, CreateSubview(src_region), CreateSubview(dst_region));
+        return;
+      }
 
-    if (src_buffer->dtype == dst_buffer->dtype && RegionsHaveSameStaticExtents(src_region, dst_region)) {
-      builder_.create<mlir::memref::CopyOp>(loc_, CreateSubview(src_region), CreateSubview(dst_region));
+      EmitLoopNest(dst_region->region, [&](llvm::ArrayRef<mlir::Value> coords) {
+        llvm::SmallVector<mlir::Value, 4> src_indices;
+        src_indices.reserve(coords.size());
+        for (size_t i = 0; i < coords.size(); ++i) {
+          if (IsStaticOne(src_region->region[i]->extent)) {
+            src_indices.push_back(AsIndex(VisitExpr(src_region->region[i]->min),
+                                          src_region->region[i]->min.dtype()));
+            continue;
+          }
+          ICHECK(analyzer_.CanProveEqual(src_region->region[i]->extent, dst_region->region[i]->extent))
+              << "tl.copy currently requires matching extents, except for static-1 broadcast";
+          src_indices.push_back(OffsetIndex(coords[i], src_region->region[i]->min));
+        }
+
+        llvm::SmallVector<mlir::Value, 4> dst_indices = LowerRegionIndices(dst_region, coords);
+        mlir::Value value = builder_.create<mlir::memref::LoadOp>(loc_, src_memref, src_indices);
+        value = CastValue(value, src_buffer->dtype, dst_buffer->dtype);
+        builder_.create<mlir::memref::StoreOp>(loc_, value, dst_memref, dst_indices);
+      });
       return;
     }
 
-    EmitLoopNest(dst_region->region, [&](llvm::ArrayRef<mlir::Value> coords) {
-      llvm::SmallVector<mlir::Value, 4> src_indices;
-      src_indices.reserve(coords.size());
-      for (size_t i = 0; i < coords.size(); ++i) {
-        if (IsStaticOne(src_region->region[i]->extent)) {
-          src_indices.push_back(AsIndex(VisitExpr(src_region->region[i]->min),
-                                        src_region->region[i]->min.dtype()));
-          continue;
-        }
-        ICHECK(analyzer_.CanProveEqual(src_region->region[i]->extent, dst_region->region[i]->extent))
-            << "tl.copy currently requires matching extents, except for static-1 broadcast";
-        src_indices.push_back(OffsetIndex(coords[i], src_region->region[i]->min));
-      }
+    Array<PrimExpr> src_logical_extents = LogicalRegionExtents(src_region);
+    Array<PrimExpr> dst_logical_extents = LogicalRegionExtents(dst_region);
+    ICHECK_EQ(src_logical_extents.size(), dst_logical_extents.size())
+        << "tl.copy currently requires matching logical ranks after dropping static-1 dims";
+    for (size_t i = 0; i < src_logical_extents.size(); ++i) {
+      ICHECK(analyzer_.CanProveEqual(src_logical_extents[i], dst_logical_extents[i]))
+          << "tl.copy rank-reduced extents must match";
+    }
 
-      llvm::SmallVector<mlir::Value, 4> dst_indices = LowerRegionIndices(dst_region, coords);
+    EmitLoopNest(LogicalRegion(dst_region->region), [&](llvm::ArrayRef<mlir::Value> coords) {
+      llvm::SmallVector<mlir::Value, 4> src_indices = LowerLogicalRegionIndices(src_region, coords);
+      llvm::SmallVector<mlir::Value, 4> dst_indices = LowerLogicalRegionIndices(dst_region, coords);
       mlir::Value value = builder_.create<mlir::memref::LoadOp>(loc_, src_memref, src_indices);
       value = CastValue(value, src_buffer->dtype, dst_buffer->dtype);
       builder_.create<mlir::memref::StoreOp>(loc_, value, dst_memref, dst_indices);
@@ -1162,44 +1241,48 @@ private:
     PrimExpr k = op->args[7];
     bool clear_accum = GetStaticBool(op->args[9], "tl.gemm clear_accum");
 
-    ICHECK_EQ(a_region->region.size(), 2) << "Only 2D tl.gemm A operands are supported";
-    ICHECK_EQ(b_region->region.size(), 2) << "Only 2D tl.gemm B operands are supported";
-    ICHECK_EQ(c_region->region.size(), 2) << "Only 2D tl.gemm C operands are supported";
+    Array<PrimExpr> a_extents = LogicalRegionExtents(a_region);
+    Array<PrimExpr> b_extents = LogicalRegionExtents(b_region);
+    Array<PrimExpr> c_extents = LogicalRegionExtents(c_region);
+
+    ICHECK_EQ(a_extents.size(), 2) << "Only logical 2D tl.gemm A operands are supported";
+    ICHECK_EQ(b_extents.size(), 2) << "Only logical 2D tl.gemm B operands are supported";
+    ICHECK_EQ(c_extents.size(), 2) << "Only logical 2D tl.gemm C operands are supported";
 
     if (transpose_a) {
-      ICHECK(analyzer_.CanProveEqual(a_region->region[0]->extent, k))
+      ICHECK(analyzer_.CanProveEqual(a_extents[0], k))
           << "tl.gemm A K extent must match K";
-      ICHECK(analyzer_.CanProveEqual(a_region->region[1]->extent, m))
+      ICHECK(analyzer_.CanProveEqual(a_extents[1], m))
           << "tl.gemm A M extent must match M";
     } else {
-      ICHECK(analyzer_.CanProveEqual(a_region->region[0]->extent, m))
+      ICHECK(analyzer_.CanProveEqual(a_extents[0], m))
           << "tl.gemm A M extent must match M";
-      ICHECK(analyzer_.CanProveEqual(a_region->region[1]->extent, k))
+      ICHECK(analyzer_.CanProveEqual(a_extents[1], k))
           << "tl.gemm A K extent must match K";
     }
     if (transpose_b) {
-      ICHECK(analyzer_.CanProveEqual(b_region->region[0]->extent, n))
+      ICHECK(analyzer_.CanProveEqual(b_extents[0], n))
           << "tl.gemm B N extent must match N";
-      ICHECK(analyzer_.CanProveEqual(b_region->region[1]->extent, k))
+      ICHECK(analyzer_.CanProveEqual(b_extents[1], k))
           << "tl.gemm B K extent must match K";
     } else {
-      ICHECK(analyzer_.CanProveEqual(b_region->region[0]->extent, k))
+      ICHECK(analyzer_.CanProveEqual(b_extents[0], k))
           << "tl.gemm B K extent must match K";
-      ICHECK(analyzer_.CanProveEqual(b_region->region[1]->extent, n))
+      ICHECK(analyzer_.CanProveEqual(b_extents[1], n))
           << "tl.gemm B N extent must match N";
     }
-    ICHECK(analyzer_.CanProveEqual(c_region->region[0]->extent, m))
+    ICHECK(analyzer_.CanProveEqual(c_extents[0], m))
         << "tl.gemm C M extent must match M";
-    ICHECK(analyzer_.CanProveEqual(c_region->region[1]->extent, n))
+    ICHECK(analyzer_.CanProveEqual(c_extents[1], n))
         << "tl.gemm C N extent must match N";
 
     if (clear_accum) {
       FillBufferRegion(c_region, CreateZeroValue(c_region->buffer->dtype), c_region->buffer->dtype);
     }
 
-    mlir::Value a_view = CreateSubview(a_region);
-    mlir::Value b_view = CreateSubview(b_region);
-    mlir::Value c_view = CreateSubview(c_region);
+    mlir::Value a_view = CreateLogicalSubview(a_region);
+    mlir::Value b_view = CreateLogicalSubview(b_region);
+    mlir::Value c_view = CreateLogicalSubview(c_region);
     if (transpose_a && transpose_b) {
       mlir::Value a_materialized = MaterializeTranspose2D(a_view, k, m, a_region->buffer->dtype);
       builder_.create<mlir::linalg::MatmulTransposeBOp>(loc_,

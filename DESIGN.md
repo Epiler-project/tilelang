@@ -369,6 +369,7 @@ Python DSL
   - `examples/riscv/example_copy.py`
   - `examples/riscv/example_reduce_sum.py`
   - `examples/riscv/example_matmul.py`
+  - `examples/riscv/example_batched_gemm.py`
   - `examples/riscv/example_dynamic_shape.py`
   - `examples/riscv/example_rms_norm.py`
   - `examples/riscv/example_online_softmax.py`
@@ -382,6 +383,11 @@ Python DSL
   - dynamic TileLang `T.copy` / `T.gemm` kernels on the host path
     - `example_dynamic_shape.py` now keeps the portable `copy + gemm` structure instead of
       falling back to a direct-loop-only example
+  - rank-reduced static-1 subview lowering for TileLang slices
+    - `T.copy` and `T.gemm` now accept logical 2D operands materialized from higher-rank
+      buffers by dropping static-1 dimensions
+    - batched slices such as `A_shared[b, :, :]` / `B_shared[b, :, :]` now lower through
+      `memref.subview` and run on the host path
 - 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
 - 仍然属于后续任务的部分主要是：
   - 将 Tier 1 portable suite 固化成更稳定的长期验收矩阵与持续扩展入口
@@ -392,10 +398,12 @@ Python DSL
     - `example_topk.py`
     - `example_convolution.py`
   - 按当前定义，Tier 1 portable completeness suite 已完成
-  - 更完整的 region / subview 组合与 rank-reduction 场景
+  - 更完整的 region / subview 组合：
+    - 当前仅覆盖 contiguous / compact row-major 与 static-1 rank-reduction
+    - 更一般的非紧凑切片、复杂 stride、更多 mixed-rank 组合仍未覆盖
   - 更广的 reduction 识别，而不只覆盖简单 full-shape sum
   - 更广的 `linalg.generic`、`linalg.reduce` 覆盖面
-  - batched / mixed-shape `tl.gemm`
+  - mixed-shape `tl.gemm` beyond the current rank-reduced batched slice
   - 更广的 qemu / spike / rv64 smoke 覆盖
   - RVV 优化路径与向量化收益验证
   - 当前机器缺少 `qemu-riscv64` / `spike` / `pk`，因此真实 RISC-V runner 还缺运行环境验证
@@ -894,6 +902,7 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
   - `examples/riscv/example_copy.py`
   - `examples/riscv/example_reduce_sum.py`
   - `examples/riscv/example_matmul.py`
+  - `examples/riscv/example_batched_gemm.py`
   - `examples/riscv/example_rms_norm.py`
   - `examples/riscv/example_online_softmax.py`
   - `examples/riscv/example_topk.py`
@@ -1046,6 +1055,7 @@ MVP 首先应该追求：
 - vector add
 - reduce sum / max
 - matmul
+- batched matmul via rank-reduced slices
 - matmul + elementwise epilogue
 
 ### 15.3 Level 2: 编译测试
