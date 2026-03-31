@@ -230,6 +230,37 @@ def test_tilelang_compile_runs_riscv_host_adapter_with_reduction_expr_generic():
 
 
 @T.prim_func
+def normalize_with_broadcast(
+    A: T.Tensor((4, 8), "float32"),
+    RowBias: T.Tensor((4,), "float32"),
+    ColScale: T.Tensor((8,), "float32"),
+    B: T.Tensor((4, 8), "float32"),
+):
+    for i, j in T.grid(4, 8):
+        with T.block("normalize"):
+            vi = T.axis.spatial(4, i)
+            vj = T.axis.spatial(8, j)
+            B[vi, vj] = (A[vi, vj] - RowBias[vi]) / ColScale[vj]
+
+
+def test_tilelang_compile_runs_riscv_host_adapter_with_broadcast_elementwise_generic():
+    kernel = tilelang.compile(normalize_with_broadcast, out_idx=[3], target="riscv")
+
+    data = torch.linspace(-2.0, 2.0, steps=32, dtype=torch.float32).reshape(4, 8)
+    row_bias = torch.linspace(-0.5, 0.5, steps=4, dtype=torch.float32)
+    col_scale = torch.linspace(0.5, 2.0, steps=8, dtype=torch.float32)
+    out = kernel(data, row_bias, col_scale)
+
+    source = kernel.get_kernel_source()
+    kernel.close()
+
+    assert "func.func @normalize_with_broadcast" in source
+    assert "linalg.generic" in source
+    assert "scf.for" not in source
+    torch.testing.assert_close(out, (data - row_bias.unsqueeze(1)) / col_scale.unsqueeze(0))
+
+
+@T.prim_func
 def tile_batched_gemm_rank_reduced(
     A: T.Tensor((2, 2, 3), "float32"),
     B: T.Tensor((2, 3, 4), "float32"),

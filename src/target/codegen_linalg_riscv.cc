@@ -138,9 +138,10 @@ private:
     std::vector<tir::Buffer> input_buffers;
   };
 
-  enum class StructuredInputAccess {
-    kBlockIdentity,
-    kOutputBroadcast,
+  struct StructuredIndexPattern {
+    llvm::SmallVector<unsigned, 4> dims;
+
+    bool operator==(const StructuredIndexPattern& other) const { return dims == other.dims; }
   };
 
   struct ReductionLoopNestMatch {
@@ -166,18 +167,16 @@ private:
 
   class StructuredExprAnalyzer final : private tir::ExprFunctor<bool(const PrimExpr&)> {
   public:
-    StructuredExprAnalyzer(llvm::ArrayRef<tir::Var> block_vars,
-                           llvm::ArrayRef<tir::Var> output_vars = {})
-        : block_vars_(block_vars.begin(), block_vars.end()),
-          output_vars_(output_vars.begin(), output_vars.end()) {}
+    explicit StructuredExprAnalyzer(llvm::ArrayRef<tir::Var> block_vars)
+        : block_vars_(block_vars.begin(), block_vars.end()) {}
 
     bool Analyze(const PrimExpr& expr) { return VisitExpr(expr); }
 
     const std::vector<tir::Buffer>& input_buffers() const { return input_buffers_; }
 
-    StructuredInputAccess input_access(const tir::Buffer& buffer) const {
-      auto it = input_access_.find(buffer.get());
-      ICHECK(it != input_access_.end())
+    StructuredIndexPattern input_pattern(const tir::Buffer& buffer) const {
+      auto it = input_patterns_.find(buffer.get());
+      ICHECK(it != input_patterns_.end())
           << "Missing structured input access for buffer: " << buffer->name;
       return it->second;
     }
@@ -185,27 +184,30 @@ private:
   private:
     using tir::ExprFunctor<bool(const PrimExpr&)>::VisitExpr;
 
-    bool MatchesVars(const Array<PrimExpr>& indices, llvm::ArrayRef<tir::Var> vars) const {
-      if (indices.size() != vars.size()) {
-        return false;
-      }
-      for (size_t i = 0; i < indices.size(); ++i) {
-        const auto* var = indices[i].as<tir::VarNode>();
-        if (var == nullptr || var != vars[i].get()) {
-          return false;
+    std::optional<StructuredIndexPattern> ClassifyIndices(const Array<PrimExpr>& indices) const {
+      StructuredIndexPattern pattern;
+      pattern.dims.reserve(indices.size());
+      size_t next_block_dim = 0;
+      for (const PrimExpr& index : indices) {
+        const auto* var = index.as<tir::VarNode>();
+        if (var == nullptr) {
+          return std::nullopt;
+        }
+        bool matched = false;
+        while (next_block_dim < block_vars_.size()) {
+          if (block_vars_[next_block_dim].get() == var) {
+            pattern.dims.push_back(static_cast<unsigned>(next_block_dim));
+            ++next_block_dim;
+            matched = true;
+            break;
+          }
+          ++next_block_dim;
+        }
+        if (!matched) {
+          return std::nullopt;
         }
       }
-      return true;
-    }
-
-    std::optional<StructuredInputAccess> ClassifyIndices(const Array<PrimExpr>& indices) const {
-      if (MatchesVars(indices, block_vars_)) {
-        return StructuredInputAccess::kBlockIdentity;
-      }
-      if (!output_vars_.empty() && MatchesVars(indices, output_vars_)) {
-        return StructuredInputAccess::kOutputBroadcast;
-      }
-      return std::nullopt;
+      return pattern;
     }
 
     template <typename T>
@@ -223,15 +225,15 @@ private:
     }
 
     bool VisitExpr_(const tir::BufferLoadNode* op) final {
-      std::optional<StructuredInputAccess> access = ClassifyIndices(op->indices);
-      if (!access.has_value()) {
+      std::optional<StructuredIndexPattern> pattern = ClassifyIndices(op->indices);
+      if (!pattern.has_value()) {
         return false;
       }
-      auto it = input_access_.find(op->buffer.get());
-      if (it != input_access_.end() && it->second != access.value()) {
+      auto it = input_patterns_.find(op->buffer.get());
+      if (it != input_patterns_.end() && !(it->second == pattern.value())) {
         return false;
       }
-      input_access_[op->buffer.get()] = access.value();
+      input_patterns_[op->buffer.get()] = pattern.value();
       if (std::find_if(input_buffers_.begin(), input_buffers_.end(),
                        [&](const tir::Buffer& buffer) { return buffer.get() == op->buffer.get(); }) ==
           input_buffers_.end()) {
@@ -284,26 +286,22 @@ private:
     }
 
     std::vector<tir::Var> block_vars_;
-    std::vector<tir::Var> output_vars_;
     std::vector<tir::Buffer> input_buffers_;
-    std::unordered_map<const Object*, StructuredInputAccess> input_access_;
+    std::unordered_map<const Object*, StructuredIndexPattern> input_patterns_;
   };
 
   class StructuredRegionExprLowerer final
       : private tir::ExprFunctor<mlir::Value(const PrimExpr&)> {
   public:
     StructuredRegionExprLowerer(TIRToMLIRLowerer* outer, llvm::ArrayRef<tir::Var> block_vars,
-                                llvm::ArrayRef<tir::Var> output_vars,
                                 llvm::ArrayRef<tir::Buffer> input_buffers,
                                 llvm::ArrayRef<mlir::Value> input_values,
-                                llvm::ArrayRef<StructuredInputAccess> input_accesses)
-        : outer_(outer),
-          block_vars_(block_vars.begin(), block_vars.end()),
-          output_vars_(output_vars.begin(), output_vars.end()) {
+                                llvm::ArrayRef<StructuredIndexPattern> input_patterns)
+        : outer_(outer), block_vars_(block_vars.begin(), block_vars.end()) {
       ICHECK_EQ(input_buffers.size(), input_values.size());
-      ICHECK_EQ(input_buffers.size(), input_accesses.size());
+      ICHECK_EQ(input_buffers.size(), input_patterns.size());
       for (size_t i = 0; i < input_buffers.size(); ++i) {
-        input_values_[input_buffers[i].get()] = {input_values[i], input_accesses[i]};
+        input_values_[input_buffers[i].get()] = {input_values[i], input_patterns[i]};
       }
     }
 
@@ -312,24 +310,18 @@ private:
   private:
     using tir::ExprFunctor<mlir::Value(const PrimExpr&)>::VisitExpr;
 
-    bool MatchesVars(const Array<PrimExpr>& indices, llvm::ArrayRef<tir::Var> vars) const {
-      if (indices.size() != vars.size()) {
+    bool IndicesMatch(const Array<PrimExpr>& indices, const StructuredIndexPattern& pattern) const {
+      if (indices.size() != pattern.dims.size()) {
         return false;
       }
       for (size_t i = 0; i < indices.size(); ++i) {
         const auto* var = indices[i].as<tir::VarNode>();
-        if (var == nullptr || var != vars[i].get()) {
+        if (var == nullptr || pattern.dims[i] >= block_vars_.size() ||
+            var != block_vars_[pattern.dims[i]].get()) {
           return false;
         }
       }
       return true;
-    }
-
-    bool IndicesMatch(const Array<PrimExpr>& indices, StructuredInputAccess access) const {
-      if (access == StructuredInputAccess::kBlockIdentity) {
-        return MatchesVars(indices, block_vars_);
-      }
-      return MatchesVars(indices, output_vars_);
     }
 
     mlir::Value VisitExpr_(const tir::VarNode* op) final {
@@ -344,7 +336,7 @@ private:
       auto it = input_values_.find(op->buffer.get());
       ICHECK(it != input_values_.end())
           << "Unbound structured input buffer in linalg region lowering: " << op->buffer->name;
-      ICHECK(IndicesMatch(op->indices, it->second.access))
+      ICHECK(IndicesMatch(op->indices, it->second.pattern))
           << "Unsupported buffer indexing pattern in structured linalg region lowering";
       return outer_->CastValue(it->second.value, op->buffer->dtype, op->dtype);
     }
@@ -596,10 +588,9 @@ private:
 
     TIRToMLIRLowerer* outer_;
     std::vector<tir::Var> block_vars_;
-    std::vector<tir::Var> output_vars_;
     struct InputBinding {
       mlir::Value value;
-      StructuredInputAccess access;
+      StructuredIndexPattern pattern;
     };
     std::unordered_map<const Object*, InputBinding> input_values_;
   };
@@ -808,14 +799,32 @@ private:
     return false;
   }
 
-  mlir::AffineMap OutputProjectionMap(size_t rank, size_t reduction_dim) {
-    llvm::SmallVector<mlir::AffineExpr, 4> results;
-    results.reserve(rank > 0 ? rank - 1 : 0);
+  StructuredIndexPattern FullIdentityPattern(size_t rank) {
+    StructuredIndexPattern pattern;
+    pattern.dims.reserve(rank);
+    for (size_t i = 0; i < rank; ++i) {
+      pattern.dims.push_back(static_cast<unsigned>(i));
+    }
+    return pattern;
+  }
+
+  StructuredIndexPattern ReductionOutputPattern(size_t rank, size_t reduction_dim) {
+    StructuredIndexPattern pattern;
+    pattern.dims.reserve(rank > 0 ? rank - 1 : 0);
     for (size_t i = 0; i < rank; ++i) {
       if (i == reduction_dim) {
         continue;
       }
-      results.push_back(builder_.getAffineDimExpr(static_cast<unsigned>(i)));
+      pattern.dims.push_back(static_cast<unsigned>(i));
+    }
+    return pattern;
+  }
+
+  mlir::AffineMap PatternMap(size_t rank, const StructuredIndexPattern& pattern) {
+    llvm::SmallVector<mlir::AffineExpr, 4> results;
+    results.reserve(pattern.dims.size());
+    for (unsigned dim : pattern.dims) {
+      results.push_back(builder_.getAffineDimExpr(dim));
     }
     return mlir::AffineMap::get(static_cast<unsigned>(rank), 0, results, &context_);
   }
@@ -1513,14 +1522,9 @@ private:
       if (input_buffer.get() == output_buffer.get()) {
         return false;
       }
-      ValidateContiguousBuffer(input_buffer);
-      if (input_buffer->shape.size() != match->loops.size()) {
+      if (!ValidateBufferForPattern(input_buffer, analyzer.input_pattern(input_buffer),
+                                    match->loops)) {
         return false;
-      }
-      for (size_t i = 0; i < match->loops.size(); ++i) {
-        if (!analyzer_.CanProveEqual(input_buffer->shape[i], match->loops[i]->extent)) {
-          return false;
-        }
       }
     }
     return true;
@@ -1630,69 +1634,52 @@ private:
     return true;
   }
 
-  bool ValidateReductionInputBuffer(const tir::Buffer& buffer, StructuredInputAccess access,
-                                    const ReductionLoopNestMatch& match) {
+  bool ValidateBufferForPattern(const tir::Buffer& buffer, const StructuredIndexPattern& pattern,
+                                llvm::ArrayRef<const tir::ForNode*> loops) {
     ValidateContiguousBuffer(buffer);
-    if (access == StructuredInputAccess::kBlockIdentity) {
-      if (buffer->shape.size() != match.loops.size()) {
-        return false;
-      }
-      for (size_t i = 0; i < match.loops.size(); ++i) {
-        if (!analyzer_.CanProveEqual(buffer->shape[i], match.loops[i]->extent)) {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    if (buffer->shape.size() != match.output_vars.size()) {
+    if (buffer->shape.size() != pattern.dims.size()) {
       return false;
     }
-    for (size_t i = 0, out_i = 0; i < match.loops.size(); ++i) {
-      if (i == match.reduction_dim) {
-        continue;
-      }
-      if (!analyzer_.CanProveEqual(buffer->shape[out_i], match.loops[i]->extent)) {
+    for (size_t i = 0; i < pattern.dims.size(); ++i) {
+      if (pattern.dims[i] >= loops.size() ||
+          !analyzer_.CanProveEqual(buffer->shape[i], loops[pattern.dims[i]]->extent)) {
         return false;
       }
-      ++out_i;
     }
     return true;
   }
 
   bool TryLowerReductionLoopNestAsGeneric(const ReductionLoopNestMatch& match, mlir::Value init_value,
                                           mlir::Value output_value) {
-    StructuredExprAnalyzer analyzer(match.block_vars, match.output_vars);
+    StructuredExprAnalyzer analyzer(match.block_vars);
     if (!analyzer.Analyze(match.reduction_expr)) {
       return false;
     }
 
     llvm::SmallVector<mlir::Value, 4> input_values;
-    llvm::SmallVector<StructuredInputAccess, 4> input_accesses;
+    llvm::SmallVector<StructuredIndexPattern, 4> input_patterns;
     input_values.reserve(analyzer.input_buffers().size());
-    input_accesses.reserve(analyzer.input_buffers().size());
+    input_patterns.reserve(analyzer.input_buffers().size());
     for (const tir::Buffer& input_buffer : analyzer.input_buffers()) {
       if (input_buffer.get() == match.output_buffer.get()) {
         return false;
       }
-      StructuredInputAccess access = analyzer.input_access(input_buffer);
-      if (!ValidateReductionInputBuffer(input_buffer, access, match)) {
+      StructuredIndexPattern pattern = analyzer.input_pattern(input_buffer);
+      if (!ValidateBufferForPattern(input_buffer, pattern, match.loops)) {
         return false;
       }
       input_values.push_back(LookupBufferValue(input_buffer));
-      input_accesses.push_back(access);
+      input_patterns.push_back(pattern);
     }
 
     size_t rank = match.loops.size();
-    mlir::AffineMap identity_map = mlir::AffineMap::getMultiDimIdentityMap(rank, &context_);
-    mlir::AffineMap output_map = OutputProjectionMap(rank, match.reduction_dim);
+    StructuredIndexPattern output_pattern = ReductionOutputPattern(rank, match.reduction_dim);
     llvm::SmallVector<mlir::AffineMap, 4> indexing_maps;
     indexing_maps.reserve(input_values.size() + 1);
-    for (StructuredInputAccess access : input_accesses) {
-      indexing_maps.push_back(access == StructuredInputAccess::kBlockIdentity ? identity_map
-                                                                              : output_map);
+    for (const StructuredIndexPattern& pattern : input_patterns) {
+      indexing_maps.push_back(PatternMap(rank, pattern));
     }
-    indexing_maps.push_back(output_map);
+    indexing_maps.push_back(PatternMap(rank, output_pattern));
 
     llvm::SmallVector<mlir::utils::IteratorType, 4> iterator_types;
     iterator_types.reserve(rank);
@@ -1719,17 +1706,16 @@ private:
       builder_.setInsertionPointToStart(body);
 
       llvm::SmallVector<mlir::Value, 4> element_args;
-      llvm::SmallVector<StructuredInputAccess, 4> element_accesses;
+      llvm::SmallVector<StructuredIndexPattern, 4> element_patterns;
       element_args.reserve(analyzer.input_buffers().size());
-      element_accesses.reserve(analyzer.input_buffers().size());
+      element_patterns.reserve(analyzer.input_buffers().size());
       for (size_t i = 0; i < analyzer.input_buffers().size(); ++i) {
         element_args.push_back(body->getArgument(i));
-        element_accesses.push_back(input_accesses[i]);
+        element_patterns.push_back(input_patterns[i]);
       }
 
-      StructuredRegionExprLowerer lowerer(this, match.block_vars, match.output_vars,
-                                          analyzer.input_buffers(), element_args,
-                                          element_accesses);
+      StructuredRegionExprLowerer lowerer(this, match.block_vars, analyzer.input_buffers(),
+                                          element_args, element_patterns);
       mlir::Value value = lowerer.Lower(match.reduction_expr);
       value = CastValue(value, match.reduction_expr.dtype(), match.output_buffer->dtype);
       mlir::Value acc = body->getArgument(static_cast<unsigned>(analyzer.input_buffers().size()));
@@ -1754,8 +1740,8 @@ private:
     if (input_load == nullptr || !IndicesMatchIdentityVars(input_load->indices, match.block_vars)) {
       return TryLowerReductionLoopNestAsGeneric(match, init_value, output_value);
     }
-    if (!ValidateReductionInputBuffer(input_load->buffer, StructuredInputAccess::kBlockIdentity,
-                                      match)) {
+    if (!ValidateBufferForPattern(input_load->buffer, FullIdentityPattern(match.loops.size()),
+                                  match.loops)) {
       return TryLowerReductionLoopNestAsGeneric(match, init_value, output_value);
     }
     mlir::Value input_value = LookupBufferValue(input_load->buffer);
@@ -1784,15 +1770,24 @@ private:
 
     llvm::SmallVector<mlir::Value, 4> input_values;
     input_values.reserve(match.input_buffers.size());
+    llvm::SmallVector<StructuredIndexPattern, 4> input_patterns;
+    input_patterns.reserve(match.input_buffers.size());
+    StructuredExprAnalyzer analyzer(match.block_vars);
+    ICHECK(analyzer.Analyze(match.store->value));
     for (const tir::Buffer& input_buffer : match.input_buffers) {
       input_values.push_back(LookupBufferValue(input_buffer));
+      input_patterns.push_back(analyzer.input_pattern(input_buffer));
     }
 
     mlir::Value output_value = LookupBufferValue(match.store->buffer);
     size_t rank = match.loops.size();
     mlir::AffineMap identity_map = mlir::AffineMap::getMultiDimIdentityMap(rank, &context_);
-    llvm::SmallVector<mlir::AffineMap, 4> indexing_maps(match.input_buffers.size() + 1,
-                                                        identity_map);
+    llvm::SmallVector<mlir::AffineMap, 4> indexing_maps;
+    indexing_maps.reserve(match.input_buffers.size() + 1);
+    for (const StructuredIndexPattern& pattern : input_patterns) {
+      indexing_maps.push_back(PatternMap(rank, pattern));
+    }
+    indexing_maps.push_back(identity_map);
     llvm::SmallVector<mlir::utils::IteratorType, 4> iterator_types(
         rank, mlir::utils::IteratorType::parallel);
 
@@ -1811,15 +1806,15 @@ private:
       mlir::OpBuilder::InsertionGuard guard(builder_);
       builder_.setInsertionPointToStart(body);
       llvm::SmallVector<mlir::Value, 4> element_args;
-      llvm::SmallVector<StructuredInputAccess, 4> element_accesses;
+      llvm::SmallVector<StructuredIndexPattern, 4> element_patterns;
       element_args.reserve(match.input_buffers.size());
-      element_accesses.reserve(match.input_buffers.size());
+      element_patterns.reserve(match.input_buffers.size());
       for (size_t i = 0; i < match.input_buffers.size(); ++i) {
         element_args.push_back(body->getArgument(i));
-        element_accesses.push_back(StructuredInputAccess::kBlockIdentity);
+        element_patterns.push_back(input_patterns[i]);
       }
-      StructuredRegionExprLowerer lowerer(this, match.block_vars, llvm::ArrayRef<tir::Var>{},
-                                          match.input_buffers, element_args, element_accesses);
+      StructuredRegionExprLowerer lowerer(this, match.block_vars, match.input_buffers,
+                                          element_args, element_patterns);
       mlir::Value result = lowerer.Lower(match.store->value);
       result = CastValue(result, match.store->value.dtype(), match.store->buffer->dtype);
       builder_.create<mlir::linalg::YieldOp>(loc_, result);

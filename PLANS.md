@@ -268,7 +268,8 @@ Recommended commit slicing:
     - simple contiguous `match_buffer -> memref.subview`
     - `tl.tileop.copy -> memref.copy` or `scf + memref.load/store` fallback
     - `tl.tileop.fill -> scf + memref.store` fallback
-    - pure `kDataPar`, identity-index, full-shape elementwise loop nests -> `linalg.generic`
+    - pure `kDataPar` elementwise loop nests with identity/broadcasted ordered-subsequence
+      loads -> `linalg.generic`
     - simple reduction init fallback via `tir.transform.LowerInitBlock`
     - simple full-shape sum/min/max reductions with structured lowering plus fallback paths
     - single-axis additive reduction expressions with identity inputs plus output-broadcast
@@ -276,10 +277,12 @@ Recommended commit slicing:
   - automated coverage currently includes:
     - copy loop
     - elementwise add
+    - broadcast elementwise normalize
     - contiguous match-buffer subview
     - reduce-sum fallback
     - `example_reduce_max.py`
     - `example_online_softmax.py` row-sum structured reduction path
+    - `example_online_softmax.py` fully structured normalize path
     - TileLang `T.copy` kernel shell
     - TileLang `T.clear` / fill kernel shell
 - Phase 3 `tl.gemm -> linalg.matmul` is partially landed:
@@ -485,8 +488,9 @@ Cover the non-GEMM structured MVP kernels.
   - prefer `linalg.generic`
   - fallback to `scf.for + arith + memref`
   - current landed status:
-    - pure `kDataPar`, identity-index, full-shape elementwise loop nests already lower to `linalg.generic`
-    - irregular slices / broadcast / predicates still stay on the `scf + memref` fallback
+    - pure `kDataPar` elementwise loop nests with identity/broadcasted ordered-subsequence
+      loads already lower to `linalg.generic`
+    - irregular slices / mixed indexing / predicates still stay on the `scf + memref` fallback
 - implement reduction recognition:
   - prefer `linalg.reduce`
   - fallback to `linalg.generic`
@@ -656,9 +660,10 @@ Run a curated set of backend-neutral examples end to end.
     - `tilelang.compile(..., target="riscv")` dynamic-shape host execution
     - `tilelang.compile(..., target="riscv")` reduce-max host execution
     - `tilelang.compile(..., target="riscv")` reduction-expression generic host execution
+    - `tilelang.compile(..., target="riscv")` broadcast elementwise generic host execution
     - `tilelang.compile(..., target="riscv")` rank-reduced batched GEMM host execution
     - full `testing/python/riscv` regression currently passes on this machine:
-      `66 passed, 1 skipped`
+      `68 passed, 1 skipped`
   - dynamic-shape lowering status:
     - buffer shape vars are rebound from function memrefs via `memref.dim`
     - symbolic compact row-major strides remain accepted in the JIT path
@@ -670,6 +675,11 @@ Run a curated set of backend-neutral examples end to end.
       are covered by the same structured path
     - additive reduction expressions such as the second reduction stage in
       `example_online_softmax.py` now lower to `linalg.fill + linalg.generic`
+  - structured elementwise lowering status:
+    - identity-load plus ordered-subsequence broadcast-load expressions now lower to
+      `linalg.generic`
+    - normalize-style row/column broadcast kernels and the final stage of
+      `example_online_softmax.py` are covered by the same structured path
   - rank-reduced slice lowering status:
     - static-1 dimensions can now be dropped through rank-reduced `memref.subview`
     - `tl.copy` supports logical-rank copies when source/destination only differ by static-1 dims

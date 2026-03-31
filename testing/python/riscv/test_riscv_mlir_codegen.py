@@ -453,6 +453,36 @@ def reduce_exp_sum(
     assert "affine_map<(d0, d1) -> (d0)>" in source
 
 
+def test_riscv_codegen_lowers_broadcast_elementwise_to_linalg_generic():
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_source(
+            """
+# from tvm.script import tir as T
+@T.prim_func
+def normalize(
+    A: T.Buffer((4, 8), "float32"),
+    RowBias: T.Buffer((4,), "float32"),
+    ColScale: T.Buffer((8,), "float32"),
+    B: T.Buffer((4, 8), "float32"),
+):
+    for i, j in T.grid(4, 8):
+        with T.block("normalize"):
+            vi = T.axis.spatial(4, i)
+            vj = T.axis.spatial(8, j)
+            B[vi, vj] = (A[vi, vj] - RowBias[vi]) / ColScale[vj]
+""",
+            "normalize",
+        )
+    )
+
+    assert "linalg.generic" in source
+    assert "arith.subf" in source
+    assert "arith.divf" in source
+    assert "affine_map<(d0, d1) -> (d0)>" in source
+    assert "affine_map<(d0, d1) -> (d1)>" in source
+    assert "scf.for" not in source
+
+
 def test_riscv_codegen_lowers_tilelang_copy_kernel():
     @T.prim_func
     def tile_copy(A: T.Tensor((4,), "float32"), B: T.Tensor((4,), "float32")):
