@@ -628,16 +628,27 @@ private:
     int64_t k = GetStaticInt(op->args[7], "tl.gemm K");
     bool clear_accum = GetStaticBool(op->args[9], "tl.gemm clear_accum");
 
-    ICHECK(!transpose_a && !transpose_b)
-        << "Only non-transposed tl.gemm is supported in linalg_riscv lowering";
+    ICHECK(!(transpose_a && transpose_b))
+        << "Simultaneously transposed-A and transposed-B tl.gemm is not supported yet in "
+           "linalg_riscv lowering";
     ICHECK_EQ(a_region->region.size(), 2) << "Only 2D tl.gemm A operands are supported";
     ICHECK_EQ(b_region->region.size(), 2) << "Only 2D tl.gemm B operands are supported";
     ICHECK_EQ(c_region->region.size(), 2) << "Only 2D tl.gemm C operands are supported";
 
-    ICHECK_EQ(GetStaticInt(a_region->region[0]->extent, "tl.gemm A M extent"), m);
-    ICHECK_EQ(GetStaticInt(a_region->region[1]->extent, "tl.gemm A K extent"), k);
-    ICHECK_EQ(GetStaticInt(b_region->region[0]->extent, "tl.gemm B K extent"), k);
-    ICHECK_EQ(GetStaticInt(b_region->region[1]->extent, "tl.gemm B N extent"), n);
+    if (transpose_a) {
+      ICHECK_EQ(GetStaticInt(a_region->region[0]->extent, "tl.gemm A K extent"), k);
+      ICHECK_EQ(GetStaticInt(a_region->region[1]->extent, "tl.gemm A M extent"), m);
+    } else {
+      ICHECK_EQ(GetStaticInt(a_region->region[0]->extent, "tl.gemm A M extent"), m);
+      ICHECK_EQ(GetStaticInt(a_region->region[1]->extent, "tl.gemm A K extent"), k);
+    }
+    if (transpose_b) {
+      ICHECK_EQ(GetStaticInt(b_region->region[0]->extent, "tl.gemm B N extent"), n);
+      ICHECK_EQ(GetStaticInt(b_region->region[1]->extent, "tl.gemm B K extent"), k);
+    } else {
+      ICHECK_EQ(GetStaticInt(b_region->region[0]->extent, "tl.gemm B K extent"), k);
+      ICHECK_EQ(GetStaticInt(b_region->region[1]->extent, "tl.gemm B N extent"), n);
+    }
     ICHECK_EQ(GetStaticInt(c_region->region[0]->extent, "tl.gemm C M extent"), m);
     ICHECK_EQ(GetStaticInt(c_region->region[1]->extent, "tl.gemm C N extent"), n);
 
@@ -648,6 +659,16 @@ private:
     mlir::Value a_view = CreateSubview(a_region);
     mlir::Value b_view = CreateSubview(b_region);
     mlir::Value c_view = CreateSubview(c_region);
+    if (transpose_a) {
+      builder_.create<mlir::linalg::MatmulTransposeAOp>(loc_, mlir::ValueRange{a_view, b_view},
+                                                        mlir::ValueRange{c_view});
+      return;
+    }
+    if (transpose_b) {
+      builder_.create<mlir::linalg::MatmulTransposeBOp>(loc_, mlir::ValueRange{a_view, b_view},
+                                                        mlir::ValueRange{c_view});
+      return;
+    }
     builder_.create<mlir::linalg::MatmulOp>(loc_, mlir::ValueRange{a_view, b_view},
                                             mlir::ValueRange{c_view});
   }
