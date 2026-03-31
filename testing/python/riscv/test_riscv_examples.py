@@ -19,6 +19,7 @@ EXAMPLES = (
     "example_reduce_sum.py",
     "example_reduce_max.py",
     "example_matmul.py",
+    "example_gemv.py",
     "example_batched_gemm.py",
     "example_dynamic_shape.py",
     "example_rms_norm.py",

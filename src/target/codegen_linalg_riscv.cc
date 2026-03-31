@@ -1278,6 +1278,29 @@ private:
     return extents;
   }
 
+  Array<PrimExpr> RegionExtents(const Array<Range>& region) {
+    Array<PrimExpr> extents;
+    extents.reserve(region.size());
+    for (const Range& range : region) {
+      extents.push_back(range->extent);
+    }
+    return extents;
+  }
+
+  Array<PrimExpr> GemmRegionExtents(const tir::BufferRegion& region) {
+    if (region->region.size() == 2) {
+      return RegionExtents(region->region);
+    }
+    return LogicalRegionExtents(region);
+  }
+
+  mlir::Value CreateGemmSubview(const tir::BufferRegion& region) {
+    if (region->region.size() == 2) {
+      return CreateSubview(region);
+    }
+    return CreateLogicalSubview(region);
+  }
+
   llvm::SmallVector<mlir::Value, 4> LowerLogicalRegionIndices(
       const tir::BufferRegion& region, llvm::ArrayRef<mlir::Value> coords) {
     llvm::SmallVector<mlir::Value, 4> indices;
@@ -1391,9 +1414,9 @@ private:
     PrimExpr k = op->args[7];
     bool clear_accum = GetStaticBool(op->args[9], "tl.gemm clear_accum");
 
-    Array<PrimExpr> a_extents = LogicalRegionExtents(a_region);
-    Array<PrimExpr> b_extents = LogicalRegionExtents(b_region);
-    Array<PrimExpr> c_extents = LogicalRegionExtents(c_region);
+    Array<PrimExpr> a_extents = GemmRegionExtents(a_region);
+    Array<PrimExpr> b_extents = GemmRegionExtents(b_region);
+    Array<PrimExpr> c_extents = GemmRegionExtents(c_region);
 
     ICHECK_EQ(a_extents.size(), 2) << "Only logical 2D tl.gemm A operands are supported";
     ICHECK_EQ(b_extents.size(), 2) << "Only logical 2D tl.gemm B operands are supported";
@@ -1430,9 +1453,9 @@ private:
       FillBufferRegion(c_region, CreateZeroValue(c_region->buffer->dtype), c_region->buffer->dtype);
     }
 
-    mlir::Value a_view = CreateLogicalSubview(a_region);
-    mlir::Value b_view = CreateLogicalSubview(b_region);
-    mlir::Value c_view = CreateLogicalSubview(c_region);
+    mlir::Value a_view = CreateGemmSubview(a_region);
+    mlir::Value b_view = CreateGemmSubview(b_region);
+    mlir::Value c_view = CreateGemmSubview(c_region);
     if (transpose_a && transpose_b) {
       mlir::Value a_materialized = MaterializeTranspose2D(a_view, k, m, a_region->buffer->dtype);
       builder_.create<mlir::linalg::MatmulTransposeBOp>(loc_,

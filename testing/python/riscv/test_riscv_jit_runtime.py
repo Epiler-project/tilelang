@@ -261,6 +261,38 @@ def test_tilelang_compile_runs_riscv_host_adapter_with_broadcast_elementwise_gen
 
 
 @T.prim_func
+def tile_gemv_vector_operand(
+    A: T.Tensor((4, 6), "float32"),
+    X: T.Tensor((6,), "float32"),
+    Y: T.Tensor((4,), "float32"),
+):
+    with T.Kernel(1, threads=1):
+        A_shared = T.alloc_shared((4, 6), "float32")
+        X_shared = T.alloc_shared((6, 1), "float32")
+        Y_local = T.alloc_fragment((4, 1), "float32")
+        T.copy(A, A_shared)
+        T.copy(X, X_shared)
+        T.clear(Y_local)
+        T.gemm(A_shared, X_shared, Y_local)
+        T.copy(Y_local, Y)
+
+
+def test_tilelang_compile_runs_riscv_host_adapter_with_gemv_shape():
+    kernel = tilelang.compile(tile_gemv_vector_operand, out_idx=[2], target="riscv")
+
+    matrix = torch.arange(24, dtype=torch.float32).reshape(4, 6)
+    vector = torch.linspace(-1.0, 1.5, steps=6, dtype=torch.float32)
+    out = kernel(matrix, vector)
+
+    source = kernel.get_kernel_source()
+    kernel.close()
+
+    assert "func.func @tile_gemv_vector_operand" in source
+    assert "linalg.matmul" in source
+    torch.testing.assert_close(out, matrix @ vector)
+
+
+@T.prim_func
 def tile_batched_gemm_rank_reduced(
     A: T.Tensor((2, 2, 3), "float32"),
     B: T.Tensor((2, 3, 4), "float32"),

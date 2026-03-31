@@ -383,6 +383,7 @@ Python DSL
   - `examples/riscv/example_reduce_max.py`
   - `examples/riscv/example_matmul.py`
   - `examples/riscv/example_batched_gemm.py`
+  - `examples/riscv/example_gemv.py`
   - `examples/riscv/example_dynamic_shape.py`
   - `examples/riscv/example_rms_norm.py`
   - `examples/riscv/example_online_softmax.py`
@@ -397,10 +398,15 @@ Python DSL
     - `example_dynamic_shape.py` now keeps the portable `copy + gemm` structure instead of
       falling back to a direct-loop-only example
   - rank-reduced static-1 subview lowering for TileLang slices
-    - `T.copy` and `T.gemm` now accept logical 2D operands materialized from higher-rank
-      buffers by dropping static-1 dimensions
+    - `T.copy` now accepts logical-shape-compatible source/destination buffers when they only
+      differ by static-1 dimensions
+    - `T.gemm` now accepts logical 2D operands materialized from higher-rank buffers by
+      dropping static-1 dimensions
     - batched slices such as `A_shared[b, :, :]` / `B_shared[b, :, :]` now lower through
       `memref.subview` and run on the host path
+    - explicit singleton-dim operands such as `(K, 1)` are preserved for `tl.gemm`, so
+      GEMV-style kernels lower through `linalg.matmul` without collapsing the vector operand
+      away
   - structured single-axis sum/min/max reductions on the host path
     - `T.max` / `T.min` update forms now share the same `linalg.reduce` lowering path as
       `sum`
@@ -414,6 +420,12 @@ Python DSL
     - normalize-style row/column broadcast expressions now lower through `linalg.generic`
     - `example_online_softmax.py` now lowers fully structurally as
       `linalg.reduce + linalg.generic + linalg.generic`
+  - singleton-dim GEMV coverage on the host path
+    - `examples/riscv/example_gemv.py` is landed as a backend-neutral Tier 2 example
+    - direct `tilelang.compile(..., target="riscv")` GEMV kernels with `(K, 1)` operands are
+      covered by MLIR, host-runtime, and example tests
+  - local regression status on this machine:
+    - `python -m pytest testing/python/riscv -q` passes with `72 passed, 1 skipped`
 - 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
 - 仍然属于后续任务的部分主要是：
   - 将 Tier 1 portable suite 固化成更稳定的长期验收矩阵与持续扩展入口
@@ -435,7 +447,7 @@ Python DSL
     - 当前 elementwise 已覆盖 identity-load 与 ordered-subsequence broadcast-load
       的规则表达式
     - 更一般的 mixed indexing / gather-scatter / predicated elementwise 仍未结构化
-  - mixed-shape `tl.gemm` beyond the current rank-reduced batched slice
+  - mixed-shape `tl.gemm` beyond the current singleton-dim GEMV and rank-reduced batched slice
   - 更广的 qemu / spike / rv64 smoke 覆盖
   - RVV 优化路径与向量化收益验证
   - 当前机器缺少 `qemu-riscv64` / `spike` / `pk`，因此真实 RISC-V runner 还缺运行环境验证

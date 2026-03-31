@@ -6,9 +6,26 @@ from tilelang._typing import BufferLikeType
 from tilelang.utils.language import (
     to_buffer_region,
     legalize_pairwise_extents,
+    prim_expr_equal,
 )
 from tilelang.language.utils import get_extent
 from tvm import ir, tir
+
+
+def _drop_unit_extents(shape: list | tuple) -> list:
+    return [extent for extent in shape if not prim_expr_equal(extent, 1)]
+
+
+def _assert_copy_buffer_shapes_compatible(src_shape, dst_shape) -> None:
+    src_logical_shape = _drop_unit_extents(list(src_shape))
+    dst_logical_shape = _drop_unit_extents(list(dst_shape))
+    if len(src_logical_shape) != len(dst_logical_shape):
+        ir.assert_structural_equal(src_shape, dst_shape)
+        return
+    for src_extent, dst_extent in zip(src_logical_shape, dst_logical_shape):
+        if not prim_expr_equal(src_extent, dst_extent):
+            ir.assert_structural_equal(src_shape, dst_shape)
+            return
 
 
 def _normalize_copy_regions(
@@ -19,7 +36,7 @@ def _normalize_copy_regions(
 ]:
     # If both side are buffers, we should make sure their shapes are equal
     if isinstance(src, tir.Buffer) and isinstance(dst, tir.Buffer):
-        ir.assert_structural_equal(src.shape, dst.shape)
+        _assert_copy_buffer_shapes_compatible(src.shape, dst.shape)
 
     src_extent = get_extent(src)
     dst_extent = get_extent(dst)

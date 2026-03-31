@@ -602,6 +602,30 @@ def test_riscv_codegen_lowers_rank_reduced_tilelang_gemm_slices():
     assert "scf.for" in source
 
 
+def test_riscv_codegen_lowers_tilelang_gemv_via_singleton_dim_gemm():
+    @T.prim_func
+    def tile_gemv(
+        A: T.Tensor((4, 6), "float32"),
+        X: T.Tensor((6,), "float32"),
+        Y: T.Tensor((4,), "float32"),
+    ):
+        with T.Kernel(1, threads=1):
+            A_shared = T.alloc_shared((4, 6), "float32")
+            X_shared = T.alloc_shared((6, 1), "float32")
+            Y_local = T.alloc_fragment((4, 1), "float32")
+            T.copy(A, A_shared)
+            T.copy(X, X_shared)
+            T.clear(Y_local)
+            T.gemm(A_shared, X_shared, Y_local)
+            T.copy(Y_local, Y)
+
+    source = _real_mlir_source_or_skip(_build_mlir_from_tilelang_prim(tile_gemv, "tile_gemv"))
+
+    assert "func.func @tile_gemv" in source
+    assert "linalg.matmul" in source
+    assert "memref<6x1xf32>" in source
+
+
 def test_riscv_codegen_lowers_tilelang_gemm_transpose_b():
     @T.prim_func
     def tile_matmul_transpose_b(

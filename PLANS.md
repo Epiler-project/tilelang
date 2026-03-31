@@ -333,6 +333,7 @@ Recommended commit slicing:
     - `examples/riscv/example_reduce_max.py`
     - `examples/riscv/example_matmul.py`
     - `examples/riscv/example_batched_gemm.py`
+    - `examples/riscv/example_gemv.py`
     - `examples/riscv/example_dynamic_shape.py`
     - `examples/riscv/example_rms_norm.py`
     - `examples/riscv/example_online_softmax.py`
@@ -657,13 +658,15 @@ Run a curated set of backend-neutral examples end to end.
     - host/artifact coverage for `example_convolution.py`
     - host/artifact coverage for `example_reduce_max.py`
     - host/artifact coverage for `example_batched_gemm.py`
+    - host/artifact coverage for `example_gemv.py`
     - `tilelang.compile(..., target="riscv")` dynamic-shape host execution
     - `tilelang.compile(..., target="riscv")` reduce-max host execution
     - `tilelang.compile(..., target="riscv")` reduction-expression generic host execution
     - `tilelang.compile(..., target="riscv")` broadcast elementwise generic host execution
     - `tilelang.compile(..., target="riscv")` rank-reduced batched GEMM host execution
+    - `tilelang.compile(..., target="riscv")` singleton-dim GEMV host execution
     - full `testing/python/riscv` regression currently passes on this machine:
-      `68 passed, 1 skipped`
+      `72 passed, 1 skipped`
   - dynamic-shape lowering status:
     - buffer shape vars are rebound from function memrefs via `memref.dim`
     - symbolic compact row-major strides remain accepted in the JIT path
@@ -682,8 +685,11 @@ Run a curated set of backend-neutral examples end to end.
       `example_online_softmax.py` are covered by the same structured path
   - rank-reduced slice lowering status:
     - static-1 dimensions can now be dropped through rank-reduced `memref.subview`
-    - `tl.copy` supports logical-rank copies when source/destination only differ by static-1 dims
+    - `tl.copy` supports logical-shape-compatible copies when source/destination only differ by
+      static-1 dims
     - `tl.gemm` accepts logical 2D operands sliced from higher-rank buffers
+    - explicit singleton-dim operands such as `(K, 1)` are preserved for GEMV-style
+      `tl.gemm`, instead of being rank-reduced away
   - broader completeness work should port the portable expansion set into backend-neutral
     `examples/riscv/` style entry points instead of trying to reuse the original GPU-oriented
     scripts unchanged
@@ -696,6 +702,7 @@ Run a curated set of backend-neutral examples end to end.
 - reduce max example runs on local host
 - matmul example runs on local host
 - batched gemm example runs on local host
+- gemv example runs on local host
 - each example has a reference NumPy or Torch correctness check
 - each example can emit RISC-V `.s` and `.o`
 
@@ -936,6 +943,9 @@ Treat the original examples in three tiers:
     - `examples/riscv/example_convolution.py`
   - additional backend-neutral structured example coverage:
     - `examples/riscv/example_batched_gemm.py`
+  - current Tier 2 progress:
+    - `examples/riscv/example_gemv.py` now validates singleton-dim `tl.gemm` as a backend-neutral
+      GEMV port
   - current status:
     - the Tier 1 portable completeness suite is covered in the current backend-neutral plan
   - `examples/elementwise/example_elementwise_add.py` and `examples/gemm/example_gemm.py`
@@ -944,6 +954,8 @@ Treat the original examples in three tiers:
 - Tier 2: later structured extensions
   - `examples/grouped_gemm/example_grouped_gemm_fwd.py`
   - `examples/gemv/example_gemv.py`
+  - current landed backend-neutral coverage:
+    - `examples/riscv/example_gemv.py`
   - selected sparse/grouped kernels after normalization
 - Tier 3: explicit non-goals for the current backend
   - `examples/warp_specialize/`
