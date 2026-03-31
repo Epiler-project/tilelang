@@ -423,6 +423,36 @@ def reduce_min(A: T.Buffer((4, 8), "int32"), B: T.Buffer((4,), "int32")):
     assert "arith.cmpi slt" in source
 
 
+def test_riscv_codegen_lowers_reduction_expr_to_linalg_generic():
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_source(
+            """
+# from tvm.script import tir as T
+@T.prim_func
+def reduce_exp_sum(
+    A: T.Buffer((4, 8), "float32"),
+    Bias: T.Buffer((4,), "float32"),
+    B: T.Buffer((4,), "float32"),
+):
+    for i, j in T.grid(4, 8):
+        with T.block("sum_exp"):
+            vi = T.axis.spatial(4, i)
+            vj = T.axis.reduce(8, j)
+            with T.init():
+                B[vi] = T.float32(0)
+            B[vi] = B[vi] + T.exp2(A[vi, vj] - Bias[vi])
+""",
+            "reduce_exp_sum",
+        )
+    )
+
+    assert "linalg.fill" in source
+    assert "linalg.generic" in source
+    assert "math.exp2" in source
+    assert "affine_map<(d0, d1) -> (d0, d1)>" in source
+    assert "affine_map<(d0, d1) -> (d0)>" in source
+
+
 def test_riscv_codegen_lowers_tilelang_copy_kernel():
     @T.prim_func
     def tile_copy(A: T.Tensor((4,), "float32"), B: T.Tensor((4,), "float32")):

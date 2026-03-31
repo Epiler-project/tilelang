@@ -199,6 +199,37 @@ def test_tilelang_compile_runs_riscv_host_adapter_with_reduce_max():
 
 
 @T.prim_func
+def reduce_exp_sum_rows(
+    A: T.Tensor((4, 8), "float32"),
+    Bias: T.Tensor((4,), "float32"),
+    B: T.Tensor((4,), "float32"),
+):
+    for i, k in T.grid(4, 8):
+        with T.block("sum_exp"):
+            vi = T.axis.spatial(4, i)
+            vk = T.axis.reduce(8, k)
+            with T.init():
+                B[vi] = T.float32(0)
+            B[vi] = B[vi] + T.exp2(A[vi, vk] - Bias[vi])
+
+
+def test_tilelang_compile_runs_riscv_host_adapter_with_reduction_expr_generic():
+    kernel = tilelang.compile(reduce_exp_sum_rows, out_idx=[2], target="riscv")
+
+    data = torch.linspace(-2.0, 3.0, steps=32, dtype=torch.float32).reshape(4, 8)
+    bias = torch.linspace(-0.5, 0.5, steps=4, dtype=torch.float32)
+    out = kernel(data, bias)
+
+    source = kernel.get_kernel_source()
+    kernel.close()
+
+    assert "func.func @reduce_exp_sum_rows" in source
+    assert "linalg.generic" in source
+    assert "math.exp2" in source
+    torch.testing.assert_close(out, torch.exp2(data - bias.unsqueeze(1)).sum(dim=1))
+
+
+@T.prim_func
 def tile_batched_gemm_rank_reduced(
     A: T.Tensor((2, 2, 3), "float32"),
     B: T.Tensor((2, 3, 4), "float32"),

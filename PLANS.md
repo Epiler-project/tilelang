@@ -240,7 +240,7 @@ Recommended commit slicing:
 ### Current status snapshot
 
 - Phase 0 target plumbing is landed
-- Phase 1 core scaffolding is landed:
+- Phase 1 real MLIR scaffolding is landed:
   - vendored `llvm-project` submodule
   - deterministic build script
   - Python toolchain discovery helpers
@@ -248,39 +248,51 @@ Recommended commit slicing:
   - real C++ MLIR builder using vendored MLIR dialect APIs
   - `tilelang.tladapter.Pipeline` backed by vendored `mlir-opt`
   - dedicated `mlir` source runtime module for `linalg_riscv`
-  - structured lowering currently covers:
+  - base lowering currently covers:
     - `PrimFunc` buffer/scalar params -> `func.func` args
     - `BlockRealize/Block`
     - `For -> scf.for`
     - `IfThenElse -> scf.if`
     - `AllocBuffer/BufferRealize/DeclBuffer -> memref.alloca`
     - unit `thread_extent` / `T.Kernel(..., threads=1)` shell
+    - `BufferLoad/BufferStore -> memref.load/store`
+    - constants, casts, arithmetic, comparisons, `Select`
+  - automated coverage currently includes:
+    - tiny kernel shell
+    - scalar-param saxpy
+    - if-guarded store
+    - local alloc-buffer staging
+- Phase 2 region/copy/elementwise/reduction is partially landed:
+  - structured lowering currently covers:
     - static compact row-major buffer parameters with explicit strides
     - simple contiguous `match_buffer -> memref.subview`
     - `tl.tileop.copy -> memref.copy` or `scf + memref.load/store` fallback
     - `tl.tileop.fill -> scf + memref.store` fallback
+    - pure `kDataPar`, identity-index, full-shape elementwise loop nests -> `linalg.generic`
+    - simple reduction init fallback via `tir.transform.LowerInitBlock`
+    - simple full-shape sum/min/max reductions with structured lowering plus fallback paths
+    - single-axis additive reduction expressions with identity inputs plus output-broadcast
+      inputs -> `linalg.generic`
+  - automated coverage currently includes:
+    - copy loop
+    - elementwise add
+    - contiguous match-buffer subview
+    - reduce-sum fallback
+    - `example_reduce_max.py`
+    - `example_online_softmax.py` row-sum structured reduction path
+    - TileLang `T.copy` kernel shell
+    - TileLang `T.clear` / fill kernel shell
+- Phase 3 `tl.gemm -> linalg.matmul` is partially landed:
+  - structured lowering currently covers:
     - `tl.tileop.gemm_py -> linalg.matmul` / `linalg.matmul_transpose_a` /
       `linalg.matmul_transpose_b` for static 2D matmul, including double-transpose via
       temporary transpose materialization
-    - `BufferLoad/BufferStore -> memref.load/store`
-    - simple reduction init fallback via `tir.transform.LowerInitBlock`
-    - constants, casts, arithmetic, comparisons, `Select`
   - automated coverage currently includes:
-    - tiny kernel shell
-    - copy loop
-    - elementwise add
-    - scalar-param saxpy
-    - if-guarded store
-    - local alloc-buffer staging
-    - contiguous match-buffer subview
-    - reduce-sum fallback
-    - TileLang `T.copy` kernel shell
-    - TileLang `T.clear` / fill kernel shell
     - TileLang `T.gemm -> linalg.matmul` kernel shell
     - TileLang `T.gemm(..., transpose_A=True)`
     - TileLang `T.gemm(..., transpose_B=True)`
     - TileLang `T.gemm(..., transpose_A=True, transpose_B=True)`
-- Phase 2 artifact/export + host-sim surface is partially landed:
+- Phase 4 artifact/export + host-sim surface is partially landed:
   - `tilelang/jit/adapter/riscv/libgen.py` currently exports:
     - `emit_mlir()`
     - `emit_llvm_ir()`
@@ -298,7 +310,9 @@ Recommended commit slicing:
     - `cse`
     - `convert-scf-to-cf`
     - `expand-strided-metadata`
+    - `lower-affine`
     - `finalize-memref-to-llvm`
+    - `convert-math-to-llvm`
     - `convert-arith-to-llvm`
     - `convert-func-to-llvm`
     - `convert-cf-to-llvm`
@@ -306,7 +320,7 @@ Recommended commit slicing:
   - automated coverage currently includes:
     - `.mlir/.ll/.s/.o` export
     - native x86 host shared-library build and NumPy correctness on copy
-- Phase 3 example surface is partially landed:
+- Phase 5 runner integration and example surface is partially landed:
   - shared helper:
     - `examples/riscv/common.py`
   - runnable examples:
@@ -316,6 +330,11 @@ Recommended commit slicing:
     - `examples/riscv/example_reduce_max.py`
     - `examples/riscv/example_matmul.py`
     - `examples/riscv/example_batched_gemm.py`
+    - `examples/riscv/example_dynamic_shape.py`
+    - `examples/riscv/example_rms_norm.py`
+    - `examples/riscv/example_online_softmax.py`
+    - `examples/riscv/example_topk.py`
+    - `examples/riscv/example_convolution.py`
   - current example CLI surface:
     - `--print-tir`
     - `--emit-mlir`
@@ -326,22 +345,24 @@ Recommended commit slicing:
   - automated coverage currently includes:
     - each example runs on the local x86 host path
     - each example emits non-empty RISC-V `.s` and `.o` artifacts
-- Phase 4 lightweight JIT runtime integration is partially landed:
   - `tilelang.compile(..., target="riscv")` now routes to `RiscvKernelAdapter`
   - `linalg_riscv` disk cache serialization / reload is now wired through the host `.so`
   - automated coverage currently includes:
     - direct JIT compile + local CPU execution
     - disk-cache reload without recompilation
-- next gap has shifted to Phase 2+:
+- next gap has shifted to late Phase 2 through Phase 6:
   - broader region / subview / slice lowering beyond:
     - the simple contiguous case
     - compact row-major symbolic layouts
     - static-1 rank-reduced views
-  - broader reduction recognition beyond single-axis full-shape sum/min/max patterns
+  - broader reduction recognition beyond:
+    - single-axis full-shape sum/min/max patterns
+    - additive expression reductions with identity + output-broadcast inputs
   - broader `linalg.generic` / `linalg.reduce` coverage beyond the current simple cases
   - mixed-shape `tl.gemm` beyond the current rank-reduced batched case
   - broader qemu/spike validation beyond the current smoke path
   - validation environment for qemu/spike is currently absent on this machine (`qemu-riscv64`, `spike`, `pk` not found in `PATH`)
+  - local `pytest testing/python/riscv -q` also requires a built TileLang/TVM Python environment with `tvm_ffi` importable
 
 ## Phase 0: Freeze Scope And Scaffolding
 
@@ -473,6 +494,8 @@ Cover the non-GEMM structured MVP kernels.
   - current landed status:
     - simple single-axis full-shape sum/min/max reductions now lower to
       `linalg.fill + linalg.reduce`
+    - additive reduction expressions such as `row_sum += exp2(A[i, j] - row_max[i])`
+      now lower to `linalg.fill + linalg.generic`
     - more complex reduction shapes still stay on the fallback path
 - add explicit unsupported-op diagnostics:
   - node type
@@ -540,7 +563,9 @@ canonicalize
 cse
 convert-scf-to-cf
 expand-strided-metadata
+lower-affine
 finalize-memref-to-llvm
+convert-math-to-llvm
 convert-arith-to-llvm
 convert-func-to-llvm
 convert-cf-to-llvm
@@ -630,9 +655,10 @@ Run a curated set of backend-neutral examples end to end.
     - host/artifact coverage for `example_batched_gemm.py`
     - `tilelang.compile(..., target="riscv")` dynamic-shape host execution
     - `tilelang.compile(..., target="riscv")` reduce-max host execution
+    - `tilelang.compile(..., target="riscv")` reduction-expression generic host execution
     - `tilelang.compile(..., target="riscv")` rank-reduced batched GEMM host execution
     - full `testing/python/riscv` regression currently passes on this machine:
-      `64 passed, 1 skipped`
+      `66 passed, 1 skipped`
   - dynamic-shape lowering status:
     - buffer shape vars are rebound from function memrefs via `memref.dim`
     - symbolic compact row-major strides remain accepted in the JIT path
@@ -642,6 +668,8 @@ Run a curated set of backend-neutral examples end to end.
     - single-axis full-shape `sum` / `min` / `max` now lower to `linalg.fill + linalg.reduce`
     - row-wise max kernels such as the first reduction stage in `example_online_softmax.py`
       are covered by the same structured path
+    - additive reduction expressions such as the second reduction stage in
+      `example_online_softmax.py` now lower to `linalg.fill + linalg.generic`
   - rank-reduced slice lowering status:
     - static-1 dimensions can now be dropped through rank-reduced `memref.subview`
     - `tl.copy` supports logical-rank copies when source/destination only differ by static-1 dims

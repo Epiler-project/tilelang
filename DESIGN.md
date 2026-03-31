@@ -319,6 +319,8 @@ Python DSL
   - `BufferLoad/BufferStore -> memref.load/store`
   - simple single-axis full-shape sum/min/max reduction init block 可识别为
     `linalg.fill + linalg.reduce`
+  - single-axis additive reduction expressions with identity inputs plus output-broadcast
+    inputs 可识别为 `linalg.fill + linalg.generic`
   - 未匹配的 reduction 仍然保留 `LowerInitBlock + scf` fallback
   - 常量、`Cast`、`Add/Sub/Mul/Div`、比较、`Select`
 - 当前已经打通的 artifact/export + host 验证子集包括：
@@ -341,7 +343,9 @@ Python DSL
   - `cse`
   - `convert-scf-to-cf`
   - `expand-strided-metadata`
+  - `lower-affine`
   - `finalize-memref-to-llvm`
+  - `convert-math-to-llvm`
   - `convert-arith-to-llvm`
   - `convert-func-to-llvm`
   - `convert-cf-to-llvm`
@@ -354,6 +358,8 @@ Python DSL
   - local `alloc_buffer` staging
   - contiguous subview / `match_buffer`
   - structured reduce-sum/min/max (`linalg.fill + linalg.reduce`)
+  - structured reduction expressions such as `row_sum += exp2(A[i, j] - row_max[i])`
+    (`linalg.generic`)
   - TileLang `T.copy` kernel shell
   - TileLang `T.clear` / fill kernel shell
   - TileLang `T.gemm -> linalg.matmul` kernel shell
@@ -396,6 +402,10 @@ Python DSL
       `sum`
     - row-wise max patterns such as the first reduction phase in `example_online_softmax.py`
       are now recognized as structured reductions
+  - structured additive reduction expressions on the host path
+    - row-wise sum patterns such as the second reduction phase in
+      `example_online_softmax.py` now lower through `linalg.generic` instead of a full
+      `scf` fallback
 - 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
 - 仍然属于后续任务的部分主要是：
   - 将 Tier 1 portable suite 固化成更稳定的长期验收矩阵与持续扩展入口
@@ -410,9 +420,12 @@ Python DSL
     - 当前仅覆盖 contiguous / compact row-major 与 static-1 rank-reduction
     - 更一般的非紧凑切片、复杂 stride、更多 mixed-rank 组合仍未覆盖
   - 更广的 reduction 识别：
-    - 当前覆盖 single-axis、full-shape 的 sum/min/max
+    - 当前覆盖 single-axis、full-shape 的 sum/min/max，以及一类
+      identity-load + output-broadcast-load 的 additive reduction expression
     - 更一般的多 reduction 轴、部分写回、非 identity indexing 仍未覆盖
-  - 更广的 `linalg.generic`、`linalg.reduce` 覆盖面
+  - 更广的 `linalg.generic`、`linalg.reduce` 覆盖面：
+    - 当前 elementwise 仍主要覆盖 pure identity-index full-shape loops
+    - 更一般的 broadcast elementwise / mixed indexing 仍未结构化
   - mixed-shape `tl.gemm` beyond the current rank-reduced batched slice
   - 更广的 qemu / spike / rv64 smoke 覆盖
   - RVV 优化路径与向量化收益验证
