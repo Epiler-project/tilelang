@@ -373,6 +373,56 @@ def reduce_sum(A: T.Buffer((4, 8), "float32"), B: T.Buffer((4,), "float32")):
     assert "arith.addf" in source
 
 
+def test_riscv_codegen_lowers_reduce_max_init_block():
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_source(
+            """
+# from tvm.script import tir as T
+@T.prim_func
+def reduce_max(A: T.Buffer((4, 8), "float32"), B: T.Buffer((4,), "float32")):
+    for i, k in T.grid(4, 8):
+        with T.block("max"):
+            vi = T.axis.spatial(4, i)
+            vk = T.axis.reduce(8, k)
+            with T.init():
+                B[vi] = T.float32(-1.0e30)
+            B[vi] = T.max(B[vi], A[vi, vk])
+""",
+            "reduce_max",
+        )
+    )
+
+    assert "linalg.fill" in source
+    assert "linalg.reduce" in source
+    assert "arith.select" in source
+    assert "arith.cmpf ogt" in source
+
+
+def test_riscv_codegen_lowers_reduce_min_init_block():
+    source = _real_mlir_source_or_skip(
+        _build_mlir_from_source(
+            """
+# from tvm.script import tir as T
+@T.prim_func
+def reduce_min(A: T.Buffer((4, 8), "int32"), B: T.Buffer((4,), "int32")):
+    for i, k in T.grid(4, 8):
+        with T.block("min"):
+            vi = T.axis.spatial(4, i)
+            vk = T.axis.reduce(8, k)
+            with T.init():
+                B[vi] = T.int32(2147483647)
+            B[vi] = T.min(B[vi], A[vi, vk])
+""",
+            "reduce_min",
+        )
+    )
+
+    assert "linalg.fill" in source
+    assert "linalg.reduce" in source
+    assert "arith.select" in source
+    assert "arith.cmpi slt" in source
+
+
 def test_riscv_codegen_lowers_tilelang_copy_kernel():
     @T.prim_func
     def tile_copy(A: T.Tensor((4,), "float32"), B: T.Tensor((4,), "float32")):

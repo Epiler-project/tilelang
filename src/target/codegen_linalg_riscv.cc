@@ -139,6 +139,12 @@ private:
   };
 
   struct ReductionLoopNestMatch {
+    enum class Kind {
+      kAdd,
+      kMin,
+      kMax,
+    };
+
     llvm::SmallVector<const tir::ForNode*, 4> loops;
     const tir::BlockRealizeNode* block_realize{nullptr};
     const tir::BlockNode* block{nullptr};
@@ -150,6 +156,7 @@ private:
     tir::Buffer output_buffer;
     PrimExpr init_value;
     size_t reduction_dim{0};
+    Kind kind{Kind::kAdd};
   };
 
   class ElementwiseExprAnalyzer final : private tir::ExprFunctor<bool(const PrimExpr&)> {
@@ -719,6 +726,37 @@ private:
     const auto* load = expr.as<tir::BufferLoadNode>();
     return load != nullptr && load->buffer.get() == buffer.get() &&
            IndicesMatchIdentityVars(load->indices, vars);
+  }
+
+  bool MatchReductionCombineExpr(const PrimExpr& expr, const tir::Buffer& output_buffer,
+                                 llvm::ArrayRef<tir::Var> output_vars,
+                                 ReductionLoopNestMatch::Kind* kind,
+                                 const PrimExpr** input_expr) {
+    auto try_match_binary = [&](const PrimExpr& lhs, const PrimExpr& rhs,
+                                ReductionLoopNestMatch::Kind candidate_kind) {
+      if (MatchesBufferLoad(lhs, output_buffer, output_vars)) {
+        *kind = candidate_kind;
+        *input_expr = &rhs;
+        return true;
+      }
+      if (MatchesBufferLoad(rhs, output_buffer, output_vars)) {
+        *kind = candidate_kind;
+        *input_expr = &lhs;
+        return true;
+      }
+      return false;
+    };
+
+    if (const auto* add = expr.as<tir::AddNode>()) {
+      return try_match_binary(add->a, add->b, ReductionLoopNestMatch::Kind::kAdd);
+    }
+    if (const auto* min = expr.as<tir::MinNode>()) {
+      return try_match_binary(min->a, min->b, ReductionLoopNestMatch::Kind::kMin);
+    }
+    if (const auto* max = expr.as<tir::MaxNode>()) {
+      return try_match_binary(max->a, max->b, ReductionLoopNestMatch::Kind::kMax);
+    }
+    return false;
   }
 
   int64_t GetStaticInt(const PrimExpr& expr, const char* what) {
@@ -1467,17 +1505,9 @@ private:
     }
     match->init_value = init_store->value;
 
-    const auto* add = match->update_store->value.as<tir::AddNode>();
-    if (add == nullptr) {
-      return false;
-    }
-
     const PrimExpr* input_expr = nullptr;
-    if (MatchesBufferLoad(add->a, match->output_buffer, match->output_vars)) {
-      input_expr = &add->b;
-    } else if (MatchesBufferLoad(add->b, match->output_buffer, match->output_vars)) {
-      input_expr = &add->a;
-    } else {
+    if (!MatchReductionCombineExpr(match->update_store->value, match->output_buffer,
+                                   match->output_vars, &match->kind, &input_expr)) {
       return false;
     }
 
@@ -1531,10 +1561,46 @@ private:
           mlir::Value in = args[0];
           mlir::Value acc = args[1];
           mlir::Value reduced;
-          if (match.output_buffer->dtype.is_float()) {
-            reduced = b.create<mlir::arith::AddFOp>(loc, acc, in);
-          } else {
-            reduced = b.create<mlir::arith::AddIOp>(loc, acc, in);
+          switch (match.kind) {
+            case ReductionLoopNestMatch::Kind::kAdd:
+              if (match.output_buffer->dtype.is_float()) {
+                reduced = b.create<mlir::arith::AddFOp>(loc, acc, in);
+              } else {
+                reduced = b.create<mlir::arith::AddIOp>(loc, acc, in);
+              }
+              break;
+            case ReductionLoopNestMatch::Kind::kMin: {
+              mlir::Value cond;
+              if (match.output_buffer->dtype.is_float()) {
+                cond = b.create<mlir::arith::CmpFOp>(loc, mlir::arith::CmpFPredicate::OLT,
+                                                     acc, in);
+              } else if (match.output_buffer->dtype.is_uint() ||
+                         match.output_buffer->dtype.is_bool()) {
+                cond = b.create<mlir::arith::CmpIOp>(loc, mlir::arith::CmpIPredicate::ult,
+                                                     acc, in);
+              } else {
+                cond = b.create<mlir::arith::CmpIOp>(loc, mlir::arith::CmpIPredicate::slt,
+                                                     acc, in);
+              }
+              reduced = b.create<mlir::arith::SelectOp>(loc, cond, acc, in);
+              break;
+            }
+            case ReductionLoopNestMatch::Kind::kMax: {
+              mlir::Value cond;
+              if (match.output_buffer->dtype.is_float()) {
+                cond = b.create<mlir::arith::CmpFOp>(loc, mlir::arith::CmpFPredicate::OGT,
+                                                     acc, in);
+              } else if (match.output_buffer->dtype.is_uint() ||
+                         match.output_buffer->dtype.is_bool()) {
+                cond = b.create<mlir::arith::CmpIOp>(loc, mlir::arith::CmpIPredicate::ugt,
+                                                     acc, in);
+              } else {
+                cond = b.create<mlir::arith::CmpIOp>(loc, mlir::arith::CmpIPredicate::sgt,
+                                                     acc, in);
+              }
+              reduced = b.create<mlir::arith::SelectOp>(loc, cond, acc, in);
+              break;
+            }
           }
           b.create<mlir::linalg::YieldOp>(loc, reduced);
         });

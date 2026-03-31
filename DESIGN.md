@@ -112,6 +112,7 @@ TileLang DSL
   - `examples/riscv/example_vector_add.py`
   - `examples/riscv/example_copy.py`
   - `examples/riscv/example_reduce_sum.py`
+  - `examples/riscv/example_reduce_max.py`
   - `examples/riscv/example_matmul.py`
 - Tier 1：portable completeness suite
   - 原始算法语义适合 `linalg_riscv`，但通常需要改写成 backend-neutral 版本
@@ -316,7 +317,8 @@ Python DSL
     `linalg.matmul_transpose_b` for static 2D matmul, including double-transpose via
     temporary transpose materialization
   - `BufferLoad/BufferStore -> memref.load/store`
-  - simple reduction init block 可识别为 `linalg.fill + linalg.reduce`
+  - simple single-axis full-shape sum/min/max reduction init block 可识别为
+    `linalg.fill + linalg.reduce`
   - 未匹配的 reduction 仍然保留 `LowerInitBlock + scf` fallback
   - 常量、`Cast`、`Add/Sub/Mul/Div`、比较、`Select`
 - 当前已经打通的 artifact/export + host 验证子集包括：
@@ -351,7 +353,7 @@ Python DSL
   - if-guarded store
   - local `alloc_buffer` staging
   - contiguous subview / `match_buffer`
-  - structured reduce-sum (`linalg.fill + linalg.reduce`)
+  - structured reduce-sum/min/max (`linalg.fill + linalg.reduce`)
   - TileLang `T.copy` kernel shell
   - TileLang `T.clear` / fill kernel shell
   - TileLang `T.gemm -> linalg.matmul` kernel shell
@@ -368,6 +370,7 @@ Python DSL
   - `examples/riscv/example_vector_add.py`
   - `examples/riscv/example_copy.py`
   - `examples/riscv/example_reduce_sum.py`
+  - `examples/riscv/example_reduce_max.py`
   - `examples/riscv/example_matmul.py`
   - `examples/riscv/example_batched_gemm.py`
   - `examples/riscv/example_dynamic_shape.py`
@@ -388,6 +391,11 @@ Python DSL
       buffers by dropping static-1 dimensions
     - batched slices such as `A_shared[b, :, :]` / `B_shared[b, :, :]` now lower through
       `memref.subview` and run on the host path
+  - structured single-axis sum/min/max reductions on the host path
+    - `T.max` / `T.min` update forms now share the same `linalg.reduce` lowering path as
+      `sum`
+    - row-wise max patterns such as the first reduction phase in `example_online_softmax.py`
+      are now recognized as structured reductions
 - 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
 - 仍然属于后续任务的部分主要是：
   - 将 Tier 1 portable suite 固化成更稳定的长期验收矩阵与持续扩展入口
@@ -401,7 +409,9 @@ Python DSL
   - 更完整的 region / subview 组合：
     - 当前仅覆盖 contiguous / compact row-major 与 static-1 rank-reduction
     - 更一般的非紧凑切片、复杂 stride、更多 mixed-rank 组合仍未覆盖
-  - 更广的 reduction 识别，而不只覆盖简单 full-shape sum
+  - 更广的 reduction 识别：
+    - 当前覆盖 single-axis、full-shape 的 sum/min/max
+    - 更一般的多 reduction 轴、部分写回、非 identity indexing 仍未覆盖
   - 更广的 `linalg.generic`、`linalg.reduce` 覆盖面
   - mixed-shape `tl.gemm` beyond the current rank-reduced batched slice
   - 更广的 qemu / spike / rv64 smoke 覆盖
@@ -901,6 +911,7 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
   - `examples/riscv/example_vector_add.py`
   - `examples/riscv/example_copy.py`
   - `examples/riscv/example_reduce_sum.py`
+  - `examples/riscv/example_reduce_max.py`
   - `examples/riscv/example_matmul.py`
   - `examples/riscv/example_batched_gemm.py`
   - `examples/riscv/example_rms_norm.py`

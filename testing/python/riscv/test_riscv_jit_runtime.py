@@ -170,6 +170,35 @@ def test_tilelang_compile_runs_riscv_host_adapter_with_dynamic_tile_gemm():
 
 
 @T.prim_func
+def reduce_max_rows(
+    A: T.Tensor((4, 8), "float32"),
+    B: T.Tensor((4,), "float32"),
+):
+    for i, k in T.grid(4, 8):
+        with T.block("max"):
+            vi = T.axis.spatial(4, i)
+            vk = T.axis.reduce(8, k)
+            with T.init():
+                B[vi] = T.float32(-1.0e30)
+            B[vi] = T.max(B[vi], A[vi, vk])
+
+
+def test_tilelang_compile_runs_riscv_host_adapter_with_reduce_max():
+    kernel = tilelang.compile(reduce_max_rows, out_idx=[1], target="riscv")
+
+    data = torch.linspace(-3.0, 4.5, steps=32, dtype=torch.float32).reshape(4, 8)
+    out = kernel(data)
+
+    source = kernel.get_kernel_source()
+    kernel.close()
+
+    assert "func.func @reduce_max_rows" in source
+    assert "linalg.reduce" in source
+    assert "arith.select" in source
+    torch.testing.assert_close(out, torch.max(data, dim=1).values)
+
+
+@T.prim_func
 def tile_batched_gemm_rank_reduced(
     A: T.Tensor((2, 2, 3), "float32"),
     B: T.Tensor((2, 3, 4), "float32"),

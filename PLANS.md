@@ -115,6 +115,7 @@ The project is considered complete for MVP when all items below are true.
 - `examples/riscv/example_vector_add.py`
 - `examples/riscv/example_copy.py`
 - `examples/riscv/example_reduce_sum.py`
+- `examples/riscv/example_reduce_max.py`
 - `examples/riscv/example_matmul.py`
 - `examples/riscv/example_batched_gemm.py`
 - `examples/riscv/common.py`
@@ -312,6 +313,7 @@ Recommended commit slicing:
     - `examples/riscv/example_vector_add.py`
     - `examples/riscv/example_copy.py`
     - `examples/riscv/example_reduce_sum.py`
+    - `examples/riscv/example_reduce_max.py`
     - `examples/riscv/example_matmul.py`
     - `examples/riscv/example_batched_gemm.py`
   - current example CLI surface:
@@ -335,7 +337,7 @@ Recommended commit slicing:
     - the simple contiguous case
     - compact row-major symbolic layouts
     - static-1 rank-reduced views
-  - broader reduction recognition beyond the simple full-shape sum pattern
+  - broader reduction recognition beyond single-axis full-shape sum/min/max patterns
   - broader `linalg.generic` / `linalg.reduce` coverage beyond the current simple cases
   - mixed-shape `tl.gemm` beyond the current rank-reduced batched case
   - broader qemu/spike validation beyond the current smoke path
@@ -469,7 +471,8 @@ Cover the non-GEMM structured MVP kernels.
   - fallback to `linalg.generic`
   - final fallback to `scf.for`
   - current landed status:
-    - simple full-shape sum reductions now lower to `linalg.fill + linalg.reduce`
+    - simple single-axis full-shape sum/min/max reductions now lower to
+      `linalg.fill + linalg.reduce`
     - more complex reduction shapes still stay on the fallback path
 - add explicit unsupported-op diagnostics:
   - node type
@@ -481,7 +484,7 @@ Cover the non-GEMM structured MVP kernels.
 
 - vector add emits `linalg.generic` or valid `scf.for`
 - simple copy emits `memref.subview` or `memref.copy`
-- reduce sum emits `linalg.reduce`, `linalg.generic`, or valid `scf` fallback
+- reduce sum/max emits `linalg.reduce`, `linalg.generic`, or valid `scf` fallback
 - unsupported kernels fail with readable error messages
 
 ## Phase 3: `tl.gemm -> linalg.matmul`
@@ -601,6 +604,8 @@ Run a curated set of backend-neutral examples end to end.
   - optional run
 - current status:
   - all four examples are landed
+  - additional reduction example landed:
+    - `examples/riscv/example_reduce_max.py`
   - additional structured coverage example landed:
     - `examples/riscv/example_batched_gemm.py`
   - Tier 1 portable ports landed:
@@ -621,16 +626,22 @@ Run a curated set of backend-neutral examples end to end.
     - host/artifact coverage for `example_online_softmax.py`
     - host/artifact coverage for `example_topk.py`
     - host/artifact coverage for `example_convolution.py`
+    - host/artifact coverage for `example_reduce_max.py`
     - host/artifact coverage for `example_batched_gemm.py`
     - `tilelang.compile(..., target="riscv")` dynamic-shape host execution
+    - `tilelang.compile(..., target="riscv")` reduce-max host execution
     - `tilelang.compile(..., target="riscv")` rank-reduced batched GEMM host execution
     - full `testing/python/riscv` regression currently passes on this machine:
-      `59 passed, 1 skipped`
+      `64 passed, 1 skipped`
   - dynamic-shape lowering status:
     - buffer shape vars are rebound from function memrefs via `memref.dim`
     - symbolic compact row-major strides remain accepted in the JIT path
     - dynamic `T.copy` and `T.gemm` host kernels are covered as a portable `copy + gemm`
       path, not just a direct loop fallback
+  - structured reduction lowering status:
+    - single-axis full-shape `sum` / `min` / `max` now lower to `linalg.fill + linalg.reduce`
+    - row-wise max kernels such as the first reduction stage in `example_online_softmax.py`
+      are covered by the same structured path
   - rank-reduced slice lowering status:
     - static-1 dimensions can now be dropped through rank-reduced `memref.subview`
     - `tl.copy` supports logical-rank copies when source/destination only differ by static-1 dims
@@ -644,6 +655,7 @@ Run a curated set of backend-neutral examples end to end.
 - vector add example runs on local host
 - copy example runs on local host
 - reduce sum example runs on local host
+- reduce max example runs on local host
 - matmul example runs on local host
 - batched gemm example runs on local host
 - each example has a reference NumPy or Torch correctness check
@@ -984,15 +996,18 @@ pytest testing/python/riscv/test_riscv_artifact_export.py -q
 python examples/riscv/example_vector_add.py --emit-mlir
 python examples/riscv/example_copy.py --emit-mlir
 python examples/riscv/example_reduce_sum.py --emit-mlir
+python examples/riscv/example_reduce_max.py --emit-mlir
 python examples/riscv/example_matmul.py --emit-mlir
 python examples/riscv/example_batched_gemm.py --emit-mlir
 
 python examples/riscv/example_vector_add.py --emit-asm
+python examples/riscv/example_reduce_max.py --emit-asm
 python examples/riscv/example_matmul.py --emit-asm
 python examples/riscv/example_batched_gemm.py --emit-asm
 python examples/riscv/example_vector_add.py --run-host
 python examples/riscv/example_copy.py --run-host
 python examples/riscv/example_reduce_sum.py --run-host
+python examples/riscv/example_reduce_max.py --run-host
 python examples/riscv/example_matmul.py --run-host
 python examples/riscv/example_batched_gemm.py --run-host
 ```
