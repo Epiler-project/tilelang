@@ -21,6 +21,7 @@ EXAMPLES = (
     "example_rms_norm.py",
     "example_online_softmax.py",
     "example_topk.py",
+    "example_convolution.py",
 )
 
 

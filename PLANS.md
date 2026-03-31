@@ -588,7 +588,6 @@ Run a curated set of backend-neutral examples end to end.
   - `examples/riscv/example_reduce_sum.py`
   - `examples/riscv/example_matmul.py`
 - define the next portable expansion set from original `examples/`:
-  - `examples/convolution/example_convolution.py`
   - `examples/dynamic_shape/example_dynamic.py`
 - each example should support:
   - print TIR
@@ -601,6 +600,7 @@ Run a curated set of backend-neutral examples end to end.
     - `examples/riscv/example_rms_norm.py`
     - `examples/riscv/example_online_softmax.py`
     - `examples/riscv/example_topk.py`
+    - `examples/riscv/example_convolution.py`
   - local host execution is wired and tested
   - `--run-qemu` now builds a freestanding RISC-V ELF and runs it through:
     - `qemu-riscv64` by default, or
@@ -611,6 +611,7 @@ Run a curated set of backend-neutral examples end to end.
     - host/artifact coverage for `example_rms_norm.py`
     - host/artifact coverage for `example_online_softmax.py`
     - host/artifact coverage for `example_topk.py`
+    - host/artifact coverage for `example_convolution.py`
   - broader completeness work should port the portable expansion set into backend-neutral
     `examples/riscv/` style entry points instead of trying to reuse the original GPU-oriented
     scripts unchanged
@@ -852,12 +853,13 @@ Treat the original examples in three tiers:
   - `examples/norm/rms_norm.py`
   - `examples/online_softmax/online_softmax.py`
   - `examples/topk/example_topk.py`
+  - `examples/convolution/example_convolution.py`
   - current landed portable ports:
     - `examples/riscv/example_rms_norm.py`
     - `examples/riscv/example_online_softmax.py`
     - `examples/riscv/example_topk.py`
+    - `examples/riscv/example_convolution.py`
   - next implementation order after the current landed ports:
-    - `examples/convolution/example_convolution.py`
     - `examples/dynamic_shape/example_dynamic.py`
   - `examples/elementwise/example_elementwise_add.py` and `examples/gemm/example_gemm.py`
     are already covered semantically by the current MVP demos, even though the original upstream

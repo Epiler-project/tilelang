@@ -372,6 +372,7 @@ Python DSL
   - `examples/riscv/example_rms_norm.py`
   - `examples/riscv/example_online_softmax.py`
   - `examples/riscv/example_topk.py`
+  - `examples/riscv/example_convolution.py`
   - 上述 examples 的 `--run-host` 与 `--emit-asm/--emit-object`
   - direct `tilelang.compile(..., target="riscv")` host execution
 - 原始 `examples/` 的 broader completeness target 现已固定为上文的 Tier 1 portable suite
@@ -381,8 +382,8 @@ Python DSL
     - `example_rms_norm.py`
     - `example_online_softmax.py`
     - `example_topk.py`
+    - `example_convolution.py`
   - 下一批优先级为：
-    - `convolution`
     - `dynamic_shape`
   - 更完整的 region / subview 组合与 rank-reduction 场景
   - 更广的 reduction 识别，而不只覆盖简单 full-shape sum
@@ -888,6 +889,7 @@ MVP 建议先打通路线 A，再逐步把核心算子切到路线 B。
   - `examples/riscv/example_rms_norm.py`
   - `examples/riscv/example_online_softmax.py`
   - `examples/riscv/example_topk.py`
+  - `examples/riscv/example_convolution.py`
 - 当前 examples 支持：
   - `--print-tir`
   - `--emit-mlir`
